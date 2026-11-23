@@ -28,6 +28,7 @@ jobs:
         src-git nss https://github.com/JuliusBairaktaris/nss-packages.git;ppe-nss
         src-git luci https://github.com/JuliusBairaktaris/luci.git;luci-app-ppe-qos
         src-git passwall_packages https://github.com/Openwrt-Passwall/openwrt-passwall-packages.git;main
+        src-git passwall2 https://github.com/Openwrt-Passwall/openwrt-passwall2.git;main
 
     steps:
       - name: Checkout RifjerWrt custom files
