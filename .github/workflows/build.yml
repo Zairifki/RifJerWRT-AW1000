@@ -103,6 +103,22 @@ jobs:
           set -euo pipefail
           bash builder/scripts/prepare-build.sh
           
+      - name: Add Footstrap LuCI theme
+        working-directory: openwrt
+        run: |
+          set -euo pipefail
+
+          if [ ! -f feeds/luci/themes/luci-theme-footstrap/Makefile ]; then
+            echo "::error::Footstrap is missing from the LuCI feed"
+            exit 1
+          fi
+
+          ./scripts/feeds install luci-theme-footstrap
+
+          test -f package/feeds/luci/luci-theme-footstrap/Makefile
+
+          echo "Footstrap theme source verified."
+          
       - name: Add 7Dollar LuCI theme
         working-directory: openwrt
         run: |
