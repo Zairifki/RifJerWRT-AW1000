@@ -1,0 +1,123 @@
+
+name: Build RifjerWrt Custom AW1000
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rifjerwrt-custom-aw1000-build
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Compile RifjerWrt Custom PPE-NSS for AW1000
+    runs-on: ubuntu-26.04
+    timeout-minutes: 360
+
+    env:
+      UPSTREAM_REPO: JuliusBairaktaris/openwrt-ppe-nss
+      UPSTREAM_REF: ppe-nss
+      BUILDER_REPO: JuliusBairaktaris/Qualcommax_NSS_Builder
+      BUILDER_REF: main
+      DEVICE: ipq807x-1g
+      VARIANT: ppe-nss
+      FEEDS: |
+        src-git nss https://github.com/JuliusBairaktaris/nss-packages.git;ppe-nss
+        src-git luci https://github.com/JuliusBairaktaris/luci.git;luci-app-ppe-qos
+
+    steps:
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bzip2 g++ gawk gcc git glibc-source libncurses-dev make rsync
+
+      - name: Checkout OpenWrt PPE-NSS
+        uses: actions/checkout@v7
+        with:
+          repository: ${{ env.UPSTREAM_REPO }}
+          ref: ${{ env.UPSTREAM_REF }}
+          fetch-depth: 0
+          path: openwrt
+
+      - name: Checkout NSS builder
+        uses: actions/checkout@v7
+        with:
+          repository: ${{ env.BUILDER_REPO }}
+          ref: ${{ env.BUILDER_REF }}
+          fetch-depth: 1
+          path: builder
+
+      - name: Checkout RifjerWrt configuration
+        uses: actions/checkout@v7
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ github.ref_name }}
+          path: rifjer-config
+
+      - name: Install custom configuration
+        run: |
+          set -euo pipefail
+          mkdir -p builder/config
+          cp rifjer-config/config/aw1000.config builder/config/aw1000.config
+
+      - name: Prepare AW1000 custom build
+        env:
+          OPENWRT_DIR: ${{ github.workspace }}/openwrt
+          BUILDER_REPO: ${{ github.workspace }}/builder
+          CONFIG_FRAGMENT: config/aw1000.config
+        run: |
+          set -euo pipefail
+          bash builder/scripts/prepare-build.sh
+
+      - name: Download packages
+        working-directory: openwrt
+        run: |
+          set -euo pipefail
+          make download -j"$(nproc)" V=s
+
+      - name: Compile firmware
+        working-directory: openwrt
+        run: |
+          set -euo pipefail
+          make -j"$(nproc)" IGNORE_ERRORS=m || make -j1 V=s IGNORE_ERRORS=m
+
+      - name: Collect AW1000 firmware
+        id: image
+        run: |
+          set -euo pipefail
+          mkdir -p release
+
+          mapfile -t images < <(find openwrt/bin/targets -type f \
+            -name '*arcadyan_aw1000*squashfs-sysupgrade.bin')
+
+          if [[ ${#images[@]} -ne 1 ]]; then
+            echo "::error::Expected exactly one AW1000 image"
+            find openwrt/bin/targets -type f -name '*.bin' -print
+            exit 1
+          fi
+
+          cp "${images[0]}" release/
+          (cd release && sha256sum *.bin > SHA256SUMS)
+
+          echo "image=$(basename "${images[0]}")" >> "$GITHUB_OUTPUT"
+
+      - name: Upload custom firmware
+        uses: actions/upload-artifact@v4
+        with:
+          name: RifjerWrt-Custom-AW1000-${{ github.run_number }}
+          path: release/*
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Build summary
+        run: |
+          {
+            echo "## RifjerWrt Custom AW1000"
+            echo "- Device: Arcadyan AW1000"
+            echo "- Target: qualcommax/ipq807x"
+            echo "- Firmware: ${{ steps.image.outputs.image }}"
+            echo "- Variant: PPE-NSS Custom"
+          } >> "$GITHUB_STEP_SUMMARY"
