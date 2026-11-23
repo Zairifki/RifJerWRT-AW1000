@@ -102,7 +102,22 @@ jobs:
         run: |
           set -euo pipefail
           bash builder/scripts/prepare-build.sh
-      
+
+      - name: Add TTL64 rules
+        run: |
+          set -euo pipefail
+
+          DIR="openwrt/files/usr/share/nftables.d/chain-post/mangle_postrouting"
+          mkdir -p "$DIR"
+
+          cat > "$DIR/99-ttl64.nft" <<'EOF'
+          oifname $wan_devices counter ip ttl set 64
+          oifname $wan_devices counter ip6 hoplimit set 64
+          EOF
+
+          test -s "$DIR/99-ttl64.nft"
+          echo "TTL64 IPv4 and IPv6 rules added."
+          
       - name: Enable STRXWALL package
         working-directory: openwrt
         run: |
