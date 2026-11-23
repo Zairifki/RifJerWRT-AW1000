@@ -223,12 +223,18 @@ jobs:
 
           test -f package/luci-theme-7dollar/Makefile
           grep -qx "CONFIG_PACKAGE_luci-theme-7dollar=y" .config
-          test -f package/feeds/luci/luci-theme-footstrap/Makefile
-          grep -qx "CONFIG_PACKAGE_luci-theme-footstrap=y" .config
-
-          echo "Footstrap theme verified."
 
           echo "7Dollar theme v1.0.19 verified."
+          
+          test -f package/feeds/luci/luci-theme-footstrap/Makefile
+          grep -qx "CONFIG_PACKAGE_luci-theme-footstrap=y" .config
+          
+          echo "Footstrap theme verified."
+          
+          test -f package/feeds/passwall2/luci-app-passwall2/Makefile
+          grep -qx "CONFIG_PACKAGE_luci-app-passwall2=y" .config
+
+          echo "PassWall 2 package verified."
 
           grep -q 'PKG_VERSION:=2.5.53' "$PKG/Makefile"
 
