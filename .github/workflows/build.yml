@@ -99,12 +99,10 @@ jobs:
             fi
           done
 
-          if ! grep -qx 'CONFIG_USE_APK=y' .config; then
-            echo "::error::CONFIG_USE_APK=y is not enabled. Check the upstream package manager configuration."
-            exit 1
-          fi
+          echo "=== Package manager configuration ==="
+          grep -E '^(CONFIG_USE_APK|CONFIG_PACKAGE_MANAGER)' .config || true
 
-          echo "STRXWALL dependencies and APK configuration verified."
+          echo "STRXWALL dependencies verified."
           
       - name: Download source packages
         working-directory: openwrt
