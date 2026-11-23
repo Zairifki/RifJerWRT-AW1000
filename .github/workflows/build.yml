@@ -62,6 +62,8 @@ jobs:
             wget \
             which \
             zlib1g-dev
+            ca-certificates \
+            curl \
             
       - name: Checkout OpenWrt PPE-NSS source
         uses: actions/checkout@v7
