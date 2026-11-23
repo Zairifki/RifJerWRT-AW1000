@@ -103,7 +103,40 @@ jobs:
           grep -E '^(CONFIG_USE_APK|CONFIG_PACKAGE_MANAGER)' .config || true
 
           echo "STRXWALL dependencies verified."
-          
+      
+      - name: Verify STRXWALL package payload
+        working-directory: openwrt
+        run: |
+          set -euo pipefail
+
+          PKG="package/strxwall/luci-app-strxwall"
+          CONFIG="$PKG/files/etc/config/strxwall"
+          INIT="$PKG/files/etc/init.d/strxwall"
+          DNS="$PKG/files/usr/libexec/strxwall-dns"
+
+          test -f "$PKG/Makefile"
+          test -f "$CONFIG"
+          test -f "$INIT"
+          test -f "$DNS"
+
+          grep -q 'PKG_VERSION:=2.5.53' "$PKG/Makefile"
+
+          grep -Eq "option enabled ['\"]0['\"]" "$CONFIG" || {
+            echo "::error::STRXWALL must be OFF by default"
+            exit 1
+          }
+
+          grep -q "CONFIG_PACKAGE_luci-app-strxwall=y" .config
+          grep -q "CONFIG_PACKAGE_dns2socks=y" .config
+          grep -q "CONFIG_PACKAGE_conntrack=y" .config
+
+          echo "STRXWALL package payload verified."
+          echo "STRXWALL default state: OFF"
+          echo "Package version: 2.5.53"
+
+          echo "=== Package manager ==="
+          grep -E '^(CONFIG_USE_APK|CONFIG_PACKAGE_MANAGER)' .config || true
+    
       - name: Download source packages
         working-directory: openwrt
         run: |
