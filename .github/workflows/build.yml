@@ -30,6 +30,13 @@ jobs:
         src-git passwall_packages https://github.com/Openwrt-Passwall/openwrt-passwall-packages.git;main
 
     steps:
+      - name: Checkout RifjerWrt custom files
+        uses: actions/checkout@v7
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ github.ref }}
+          path: rifjerwrt
+          
       - name: Install build dependencies
         run: |
           set -euo pipefail
@@ -55,7 +62,7 @@ jobs:
       - name: Add local STRXWALL package
         run: |
           set -euo pipefail
-          ZIP="$GITHUB_WORKSPACE/RifjerWrt-packages-strxwall-layout.zip"
+          ZIP="$GITHUB_WORKSPACE/rifjerwrt/RifjerWrt-packages-strxwall-layout.zip"
           test -f "$ZIP"
           mkdir -p "$RUNNER_TEMP/strxwall-package"
           unzip -q "$ZIP" -d "$RUNNER_TEMP/strxwall-package"
