@@ -70,8 +70,8 @@ jobs:
           SRC="$RUNNER_TEMP/strxwall-package/packages/strxwall/luci-app-strxwall"
           test -f "$SRC/Makefile"
 
-          mkdir -p openwrt/package/strxwall
-          cp -a "$SRC" openwrt/package/strxwall/
+          mkdir -p openwrt/package/strxwall/luci-app-strxwall
+          cp -a "$SRC"/. openwrt/package/strxwall/luci-app-strxwall/
           
       - name: Prepare AW1000 configuration
         env:
@@ -85,7 +85,10 @@ jobs:
         working-directory: openwrt
         run: |
           set -euo pipefail
+
           echo 'CONFIG_PACKAGE_luci-app-strxwall=y' >> .config
+          echo 'CONFIG_PACKAGE_dns2socks=y' >> .config
+
           make defconfig
 
           grep -qx 'CONFIG_PACKAGE_luci-app-strxwall=y' .config || {
@@ -93,6 +96,11 @@ jobs:
             exit 1
           }
 
+          grep -qx 'CONFIG_PACKAGE_dns2socks=y' .config || {
+            echo "::error::dns2socks package was dropped by Kconfig"
+            exit 1
+          }
+          
       - name: Download source packages
         working-directory: openwrt
         run: |
