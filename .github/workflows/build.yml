@@ -27,6 +27,7 @@ jobs:
       FEEDS: |
         src-git nss https://github.com/JuliusBairaktaris/nss-packages.git;ppe-nss
         src-git luci https://github.com/JuliusBairaktaris/luci.git;luci-app-ppe-qos
+        src-git passwall_packages https://github.com/Openwrt-Passwall/openwrt-passwall-packages.git;main
 
     steps:
       - name: Install build dependencies
@@ -51,6 +52,20 @@ jobs:
           fetch-depth: 1
           path: builder
 
+      - name: Add local STRXWALL package
+        run: |
+          set -euo pipefail
+          ZIP="$GITHUB_WORKSPACE/RifjerWrt-packages-strxwall-layout.zip"
+          test -f "$ZIP"
+          mkdir -p "$RUNNER_TEMP/strxwall-package"
+          unzip -q "$ZIP" -d "$RUNNER_TEMP/strxwall-package"
+
+          SRC="$RUNNER_TEMP/strxwall-package/packages/strxwall/luci-app-strxwall"
+          test -f "$SRC/Makefile"
+
+          mkdir -p openwrt/package/strxwall
+          cp -a "$SRC" openwrt/package/strxwall/
+          
       - name: Prepare AW1000 configuration
         env:
           OPENWRT_DIR: ${{ github.workspace }}/openwrt
@@ -58,6 +73,18 @@ jobs:
         run: |
           set -euo pipefail
           bash builder/scripts/prepare-build.sh
+
+      - name: Enable STRXWALL package
+        working-directory: openwrt
+        run: |
+          set -euo pipefail
+          echo 'CONFIG_PACKAGE_luci-app-strxwall=y' >> .config
+          make defconfig
+
+          grep -qx 'CONFIG_PACKAGE_luci-app-strxwall=y' .config || {
+            echo "::error::STRXWALL package was dropped by Kconfig"
+            exit 1
+          }
 
       - name: Download source packages
         working-directory: openwrt
