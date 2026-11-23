@@ -80,7 +80,7 @@ jobs:
         run: |
           set -euo pipefail
           bash builder/scripts/prepare-build.sh
-
+      
       - name: Enable STRXWALL package
         working-directory: openwrt
         run: |
@@ -88,18 +88,23 @@ jobs:
 
           echo 'CONFIG_PACKAGE_luci-app-strxwall=y' >> .config
           echo 'CONFIG_PACKAGE_dns2socks=y' >> .config
+          echo 'CONFIG_PACKAGE_conntrack=y' >> .config
 
           make defconfig
 
-          grep -qx 'CONFIG_PACKAGE_luci-app-strxwall=y' .config || {
-            echo "::error::STRXWALL package was dropped by Kconfig"
-            exit 1
-          }
+          for package in luci-app-strxwall dns2socks conntrack; do
+            if ! grep -qx "CONFIG_PACKAGE_${package}=y" .config; then
+              echo "::error::Required package ${package} was dropped by Kconfig"
+              exit 1
+            fi
+          done
 
-          grep -qx 'CONFIG_PACKAGE_dns2socks=y' .config || {
-            echo "::error::dns2socks package was dropped by Kconfig"
+          if ! grep -qx 'CONFIG_USE_APK=y' .config; then
+            echo "::error::CONFIG_USE_APK=y is not enabled. Check the upstream package manager configuration."
             exit 1
-          }
+          fi
+
+          echo "STRXWALL dependencies and APK configuration verified."
           
       - name: Download source packages
         working-directory: openwrt
