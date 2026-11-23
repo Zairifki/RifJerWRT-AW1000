@@ -146,7 +146,26 @@ jobs:
 
           test -s "$DIR/99-ttl64.nft"
           echo "TTL64 IPv4 and IPv6 rules added."
-          
+      
+      - name: Set Footstrap as default LuCI theme
+        run: |
+          set -euo pipefail
+
+          DIR="openwrt/files/etc/uci-defaults"
+          mkdir -p "$DIR"
+
+          cat > "$DIR/99-rifjerwrt-default-theme" <<'EOF'
+          #!/bin/sh
+          uci -q set luci.main.mediaurlbase='/luci-static/footstrap'
+          uci -q commit luci
+          exit 0
+          EOF
+
+          chmod 0755 "$DIR/99-rifjerwrt-default-theme"
+          test -s "$DIR/99-rifjerwrt-default-theme"
+
+          echo "Footstrap configured as default LuCI theme."
+
       - name: Enable STRXWALL package
         working-directory: openwrt
         run: |
