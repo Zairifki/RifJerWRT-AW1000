@@ -190,6 +190,7 @@ jobs:
           echo 'CONFIG_PACKAGE_conntrack=y' >> .config
           echo 'CONFIG_PACKAGE_luci-theme-7dollar=y' >> .config
           echo 'CONFIG_PACKAGE_luci-theme-footstrap=y' >> .config
+          echo 'CONFIG_PACKAGE_luci-app-passwall2=y' >> .config
 
           make defconfig
 
