@@ -189,6 +189,10 @@ jobs:
 
           test -f package/luci-theme-7dollar/Makefile
           grep -qx "CONFIG_PACKAGE_luci-theme-7dollar=y" .config
+          test -f package/feeds/luci/luci-theme-footstrap/Makefile
+          grep -qx "CONFIG_PACKAGE_luci-theme-footstrap=y" .config
+
+          echo "Footstrap theme verified."
 
           echo "7Dollar theme v1.0.19 verified."
 
