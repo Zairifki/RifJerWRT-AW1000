@@ -1,0 +1,119 @@
+
+name: Build RifjerWrt AW1000
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rifjerwrt-aw1000-build
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Compile OpenWrt PPE-NSS for Arcadyan AW1000
+    runs-on: ubuntu-26.04
+    timeout-minutes: 360
+
+    env:
+      UPSTREAM_REPO: JuliusBairaktaris/openwrt-ppe-nss
+      UPSTREAM_REF: ppe-nss
+      BUILDER_REPO: JuliusBairaktaris/Qualcommax_NSS_Builder
+      BUILDER_REF: main
+      DEVICE: ipq807x-1g
+      VARIANT: ppe-nss
+      FEEDS: |
+        src-git nss https://github.com/JuliusBairaktaris/nss-packages.git;ppe-nss
+        src-git luci https://github.com/JuliusBairaktaris/luci.git;luci-app-ppe-qos
+
+    steps:
+      - name: Install build dependencies
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y bzip2 g++ gawk gcc git glibc-source libncurses-dev make rsync
+
+      - name: Checkout OpenWrt PPE-NSS source
+        uses: actions/checkout@v7
+        with:
+          repository: ${{ env.UPSTREAM_REPO }}
+          ref: ${{ env.UPSTREAM_REF }}
+          fetch-depth: 0
+          path: openwrt
+
+      - name: Checkout upstream NSS builder
+        uses: actions/checkout@v7
+        with:
+          repository: ${{ env.BUILDER_REPO }}
+          ref: ${{ env.BUILDER_REF }}
+          fetch-depth: 1
+          path: builder
+
+      - name: Prepare AW1000 configuration
+        env:
+          OPENWRT_DIR: ${{ github.workspace }}/openwrt
+          BUILDER_REPO: ${{ github.workspace }}/builder
+        run: |
+          set -euo pipefail
+          bash builder/scripts/prepare-build.sh
+
+      - name: Download source packages
+        working-directory: openwrt
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            make download -j"$(nproc)" V=s && break
+            if [[ "$attempt" -eq 3 ]]; then
+              echo "::error::Source download failed"
+              exit 1
+            fi
+            sleep 5
+          done
+
+      - name: Compile firmware
+        working-directory: openwrt
+        run: |
+          set -euo pipefail
+          make -j"$(nproc)" IGNORE_ERRORS=m || make -j1 V=s IGNORE_ERRORS=m
+
+      - name: Collect AW1000 sysupgrade image
+        id: image
+        run: |
+          set -euo pipefail
+          mkdir -p release
+          mapfile -t images < <(find openwrt/bin/targets -type f \
+            -name '*arcadyan_aw1000*squashfs-sysupgrade.bin')
+
+          if [[ ${#images[@]} -ne 1 ]]; then
+            echo "::error::Expected exactly one AW1000 image"
+            find openwrt/bin/targets -type f -name '*.bin' -print
+            exit 1
+          fi
+
+          cp "${images[0]}" release/
+          cp "$(dirname "${images[0]}")/config.buildinfo" release/ 2>/dev/null || true
+          (cd release && sha256sum *.bin > SHA256SUMS)
+          echo "image=$(basename "${images[0]}")" >> "$GITHUB_OUTPUT"
+
+      - name: Upload firmware artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: RifjerWrt-AW1000-${{ github.run_number }}
+          path: release/*
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Build summary
+        run: |
+          {
+            echo "## RifjerWrt AW1000 build"
+            echo "- Device: Arcadyan AW1000"
+            echo "- Target: qualcommax/ipq807x"
+            echo "- Source: $UPSTREAM_REPO@$UPSTREAM_REF"
+            echo "- Builder: $BUILDER_REPO@$BUILDER_REF"
+            echo "- Firmware: ${{ steps.image.outputs.image }}"
+            echo
+            echo "Sysupgrade image only. Do not flash directly over stock vendor firmware."
+          } >> "$GITHUB_STEP_SUMMARY"
