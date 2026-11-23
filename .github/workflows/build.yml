@@ -108,7 +108,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          git clone --depth 1 \
+          git clone --depth 1 --branch v1.0.19 \
             https://github.com/itsmaiGe/luci-theme-7dollar.git \
             feeds/luci/themes/luci-theme-7dollar
 
@@ -116,7 +116,7 @@ jobs:
 
           test -f feeds/luci/themes/luci-theme-7dollar/Makefile
 
-          echo "7Dollar theme source added."
+          echo "7Dollar theme v1.0.19 source added."
           
       - name: Add TTL64 rules
         run: |
@@ -145,7 +145,7 @@ jobs:
           
           make defconfig
 
-          for package in luci-app-strxwall dns2socks conntrack; do
+          for package in luci-app-strxwall dns2socks conntrack luci-theme-7dollar; do
             if ! grep -qx "CONFIG_PACKAGE_${package}=y" .config; then
               echo "::error::Required package ${package} was dropped by Kconfig"
               exit 1
