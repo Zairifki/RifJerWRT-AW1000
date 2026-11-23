@@ -103,6 +103,19 @@ jobs:
         run: |
           set -euo pipefail
           bash builder/scripts/prepare-build.sh
+      
+      - name: Add PassWall 2 package
+        working-directory: openwrt
+        run: |
+          set -euo pipefail
+
+          test -f feeds/passwall2/luci-app-passwall2/Makefile
+
+          ./scripts/feeds install -p passwall2 luci-app-passwall2
+
+          test -f package/feeds/passwall2/luci-app-passwall2/Makefile
+
+          echo "PassWall 2 source installed."
           
       - name: Add Footstrap LuCI theme
         working-directory: openwrt
