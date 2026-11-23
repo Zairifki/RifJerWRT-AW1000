@@ -155,6 +155,7 @@ jobs:
           echo 'CONFIG_PACKAGE_luci-app-strxwall=y' >> .config
           echo 'CONFIG_PACKAGE_dns2socks=y' >> .config
           echo 'CONFIG_PACKAGE_conntrack=y' >> .config
+          echo 'CONFIG_PACKAGE_luci-theme-footstrap=y' >> .config
           echo 'CONFIG_PACKAGE_luci-theme-7dollar=y' >> .config
           
           make defconfig
