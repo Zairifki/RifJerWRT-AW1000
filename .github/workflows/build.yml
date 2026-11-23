@@ -110,11 +110,9 @@ jobs:
 
           git clone --depth 1 --branch v1.0.19 \
             https://github.com/itsmaiGe/luci-theme-7dollar.git \
-            feeds/luci/themes/luci-theme-7dollar
+            package/luci-theme-7dollar
 
-          ./scripts/feeds install luci-theme-7dollar
-
-          test -f feeds/luci/themes/luci-theme-7dollar/Makefile
+          test -f package/luci-theme-7dollar/Makefile
 
           echo "7Dollar theme v1.0.19 source added."
           
