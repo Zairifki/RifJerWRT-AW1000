@@ -239,13 +239,33 @@ jobs:
             sleep 5
           done
 
+      
       - name: Compile firmware
         working-directory: openwrt
         run: |
-          set -euo pipefail
-          echo "Build jobs: $(nproc)"
-          echo "Starting RifjerWrt compile..."
-          make -j"$(nproc)" V=s
+          set -uo pipefail
+
+          echo "===== BUILD START ====="
+          date -u
+
+          make -j"$(nproc)" V=s 2>&1 | tee ../build.log || {
+            echo "===== PARALLEL BUILD FAILED ====="
+            echo "===== RETRY SINGLE JOB ====="
+
+            make -j1 V=s 2>&1 | tee -a ../build.log
+          }
+
+          echo "===== BUILD FINISHED ====="
+          date -u
+
+      - name: Upload Build Log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: RifjerWrt-Build-Log-${{ github.run_number }}
+          path: build.log
+          if-no-files-found: warn
+          retention-days: 14
 
       - name: Show compiler cache statistics
         if: always()
