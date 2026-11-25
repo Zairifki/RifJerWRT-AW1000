@@ -1,4 +1,4 @@
-name: Build RifjerWrt AW1000
+name: Build HornetWrt AW1000
 
 on:
   workflow_dispatch:
@@ -12,7 +12,7 @@ concurrency:
 
 jobs:
   build:
-    name: Compile OpenWrt PPE-NSS for Arcadyan AW1000
+    name: Compile HornetWrt PPE-NSS for Arcadyan AW1000
     runs-on: ubuntu-26.04
     timeout-minutes: 360
 
@@ -103,38 +103,26 @@ jobs:
           set -euo pipefail
           bash builder/scripts/prepare-build.sh
 
-      - name: Fix PF_RING Linux 6.18 compatibility
-        run: |
-          set -euo pipefail
-
-          PATCH_DIR="openwrt/feeds/packages/libs/libpfring/patches"
-          mkdir -p "$PATCH_DIR"
-
-          cat > "$PATCH_DIR/003-linux-6.18-sockaddr.patch" <<'EOF'
-          --- a/kernel/pf_ring.c
-          +++ b/kernel/pf_ring.c
-          @@ -5851 +5851 @@
-          -static int ring_bind(struct socket *sock, struct sockaddr_unsized *sa, int addr_len)
-          +static int ring_bind(struct socket *sock, struct sockaddr *sa, int addr_len)
-          EOF
-
-          echo "PF_RING compatibility patch prepared."
-
-      - name: Fix PF_RING compatibility with Linux 6.18.64
+      - name: Patch PF_RING for OpenWrt Linux 6.18.64
         run: |
           set -euo pipefail
           PATCH_DIR="openwrt/feeds/packages/libs/libpfring/patches"
           mkdir -p "$PATCH_DIR"
 
-          cat > "$PATCH_DIR/003-fix-compilation-on-6.18.64.patch" <<'EOF'
+          cat > "$PATCH_DIR/100-openwrt-linux-6.18-sockaddr.patch" <<'EOF'
           --- a/kernel/pf_ring.c
           +++ b/kernel/pf_ring.c
-          @@ -5851 +5851 @@
+          @@ -5848,7 +5848,3 @@
+           /* Bind to a device */
+          -#if LINUX_VERSION_CODE >= KERNEL_VERSION(6,19,0)
           -static int ring_bind(struct socket *sock, struct sockaddr_unsized *sa, int addr_len)
-          +static int ring_bind(struct socket *sock, struct sockaddr *sa, int addr_len)
+          -#else
+           static int ring_bind(struct socket *sock, struct sockaddr *sa, int addr_len)
+          -#endif
+           {
           EOF
 
-          echo "PF_RING compatibility patch added."
+          echo "PF_RING Linux 6.18 compatibility patch staged."
 
       - name: Add PassWall 2 package
         working-directory: openwrt
@@ -194,7 +182,7 @@ jobs:
           test -s "$DIR/99-rifjerwrt-default-theme"
           echo "Footstrap configured as default LuCI theme."
 
-      - name: Configure HornetWrt WiFi
+      - name: Configure HornetWrt WiFi defaults
         run: |
           set -euo pipefail
           DIR="openwrt/files/etc/uci-defaults"
@@ -202,17 +190,23 @@ jobs:
 
           cat > "$DIR/99zz-hornetwrt-wireless" <<'EOF'
           #!/bin/sh
+          set -u
+
+          found_2g=0
+          found_5g=0
 
           for dev in $(uci -q show wireless | sed -n 's/^wireless\.\([^.=]*\)=wifi-device$/\1/p'); do
-              band="$(uci -q get wireless.$dev.band || true)"
-              hwmode="$(uci -q get wireless.$dev.hwmode || true)"
+              band="$(uci -q get "wireless.$dev.band" 2>/dev/null || true)"
+              hwmode="$(uci -q get "wireless.$dev.hwmode" 2>/dev/null || true)"
 
               case "$band:$hwmode" in
-                  2g:*|*:11g|*:11b|*:11ng)
+                  2g:*|*:11b|*:11g|*:11ng)
                       ssid="HornetWrt_2G"
+                      found_2g=1
                       ;;
-                  5g:*|*:11a|*:11ac|*:11ax)
+                  5g:*|*:11a|*:11ac|*:11axa|*:11ax)
                       ssid="HornetWrt_5G"
+                      found_5g=1
                       ;;
                   *)
                       continue
@@ -220,9 +214,11 @@ jobs:
               esac
 
               iface=""
+              first_iface=""
               for section in $(uci -q show wireless | sed -n 's/^wireless\.\([^.=]*\)=wifi-iface$/\1/p'); do
-                  [ "$(uci -q get wireless.$section.device)" = "$dev" ] || continue
-                  [ "$(uci -q get wireless.$section.mode)" = "ap" ] || continue
+                  [ "$(uci -q get "wireless.$section.device" 2>/dev/null || true)" = "$dev" ] || continue
+                  [ "$(uci -q get "wireless.$section.mode" 2>/dev/null || true)" = "ap" ] || continue
+                  [ -n "$first_iface" ] || first_iface="$section"
                   case "$section" in
                       default_radio*)
                           iface="$section"
@@ -231,28 +227,30 @@ jobs:
                   esac
               done
 
+              [ -n "$iface" ] || iface="$first_iface"
               if [ -z "$iface" ]; then
-                  iface="hornet_${dev}"
-                  uci set wireless.$iface=wifi-iface
-                  uci set wireless.$iface.device="$dev"
-                  uci set wireless.$iface.network="lan"
-                  uci set wireless.$iface.mode="ap"
+                  iface="hornet_$dev"
+                  uci set "wireless.$iface=wifi-iface"
+                  uci set "wireless.$iface.device=$dev"
+                  uci set "wireless.$iface.network=lan"
+                  uci set "wireless.$iface.mode=ap"
               fi
 
-              uci set wireless.$iface.ssid="$ssid"
-              uci set wireless.$iface.encryption="psk2"
-              uci set wireless.$iface.key="password"
-              uci set wireless.$iface.disabled="0"
+              uci set "wireless.$iface.ssid=$ssid"
+              uci set "wireless.$iface.encryption=psk2"
+              uci set "wireless.$iface.key=password"
+              uci set "wireless.$iface.disabled=0"
           done
 
           uci commit wireless
+          logger -t hornetwrt "WiFi defaults applied (2.4 GHz: $found_2g, 5 GHz: $found_5g)"
           exit 0
           EOF
 
           chmod 0755 "$DIR/99zz-hornetwrt-wireless"
-          echo "HornetWrt WiFi defaults prepared."
+          echo "HornetWrt 2.4 GHz and 5 GHz WiFi defaults prepared."
 
-      - name: Enable RifjerWrt packages and ccache
+      - name: Enable HornetWrt packages and ccache
         working-directory: openwrt
         run: |
           set -euo pipefail
@@ -278,7 +276,7 @@ jobs:
           done
           echo "=== Package manager configuration ==="
           grep -E '^(CONFIG_USE_APK|CONFIG_PACKAGE_MANAGER)' .config || true
-          echo "RifjerWrt packages and ccache configuration verified."
+          echo "HornetWrt packages and ccache configuration verified."
 
       - name: Verify STRXWALL package payload
         working-directory: openwrt
@@ -364,7 +362,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: RifjerWrt-Build-Log-${{ github.run_number }}
+          name: HornetWrt-Build-Log-${{ github.run_number }}
           path: build.log
           if-no-files-found: warn
           retention-days: 14
@@ -401,7 +399,7 @@ jobs:
       - name: Upload firmware artifact
         uses: actions/upload-artifact@v4
         with:
-          name: RifjerWrt-AW1000-${{ github.run_number }}
+          name: HornetWrt-AW1000-${{ github.run_number }}
           path: release/*
           if-no-files-found: error
           retention-days: 14
@@ -409,7 +407,7 @@ jobs:
       - name: Build summary
         run: |
           {
-            echo "## RifjerWrt AW1000 build"
+            echo "## HornetWrt AW1000 build"
             echo "- Device: Arcadyan AW1000 Hardware V1"
             echo "- Target: qualcommax/ipq807x"
             echo "- Source: $UPSTREAM_REPO@$UPSTREAM_REF"
