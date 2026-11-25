@@ -225,8 +225,7 @@ jobs:
                       iface="$section"
                       break
               done
-
-              [ -n "$iface" ] || iface="$first_iface"
+              
               if [ -z "$iface" ]; then
                   iface="hornet_$dev"
                   uci set "wireless.$iface=wifi-iface"
