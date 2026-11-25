@@ -103,6 +103,23 @@ jobs:
           set -euo pipefail
           bash builder/scripts/prepare-build.sh
 
+      - name: Fix PF_RING Linux 6.18 compatibility
+        run: |
+          set -euo pipefail
+
+          PATCH_DIR="openwrt/feeds/packages/libs/libpfring/patches"
+          mkdir -p "$PATCH_DIR"
+
+          cat > "$PATCH_DIR/003-linux-6.18-sockaddr.patch" <<'EOF'
+          --- a/kernel/pf_ring.c
+          +++ b/kernel/pf_ring.c
+          @@ -5851 +5851 @@
+          -static int ring_bind(struct socket *sock, struct sockaddr_unsized *sa, int addr_len)
+          +static int ring_bind(struct socket *sock, struct sockaddr *sa, int addr_len)
+          EOF
+
+          echo "PF_RING compatibility patch prepared."
+
       - name: Fix PF_RING compatibility with Linux 6.18.64
         run: |
           set -euo pipefail
@@ -176,6 +193,64 @@ jobs:
           chmod 0755 "$DIR/99-rifjerwrt-default-theme"
           test -s "$DIR/99-rifjerwrt-default-theme"
           echo "Footstrap configured as default LuCI theme."
+
+      - name: Configure HornetWrt WiFi
+        run: |
+          set -euo pipefail
+          DIR="openwrt/files/etc/uci-defaults"
+          mkdir -p "$DIR"
+
+          cat > "$DIR/99zz-hornetwrt-wireless" <<'EOF'
+          #!/bin/sh
+
+          for dev in $(uci -q show wireless | sed -n 's/^wireless\.\([^.=]*\)=wifi-device$/\1/p'); do
+              band="$(uci -q get wireless.$dev.band || true)"
+              hwmode="$(uci -q get wireless.$dev.hwmode || true)"
+
+              case "$band:$hwmode" in
+                  2g:*|*:11g|*:11b|*:11ng)
+                      ssid="HornetWrt_2G"
+                      ;;
+                  5g:*|*:11a|*:11ac|*:11ax)
+                      ssid="HornetWrt_5G"
+                      ;;
+                  *)
+                      continue
+                      ;;
+              esac
+
+              iface=""
+              for section in $(uci -q show wireless | sed -n 's/^wireless\.\([^.=]*\)=wifi-iface$/\1/p'); do
+                  [ "$(uci -q get wireless.$section.device)" = "$dev" ] || continue
+                  [ "$(uci -q get wireless.$section.mode)" = "ap" ] || continue
+                  case "$section" in
+                      default_radio*)
+                          iface="$section"
+                          break
+                          ;;
+                  esac
+              done
+
+              if [ -z "$iface" ]; then
+                  iface="hornet_${dev}"
+                  uci set wireless.$iface=wifi-iface
+                  uci set wireless.$iface.device="$dev"
+                  uci set wireless.$iface.network="lan"
+                  uci set wireless.$iface.mode="ap"
+              fi
+
+              uci set wireless.$iface.ssid="$ssid"
+              uci set wireless.$iface.encryption="psk2"
+              uci set wireless.$iface.key="password"
+              uci set wireless.$iface.disabled="0"
+          done
+
+          uci commit wireless
+          exit 0
+          EOF
+
+          chmod 0755 "$DIR/99zz-hornetwrt-wireless"
+          echo "HornetWrt WiFi defaults prepared."
 
       - name: Enable RifjerWrt packages and ccache
         working-directory: openwrt
@@ -298,23 +373,30 @@ jobs:
         if: always()
         run: |
           ccache --show-stats || true
-
-      - name: Collect AW1000 sysupgrade image
+      
+      - name: Collect HornetWrt AW1000 firmware
         id: image
         run: |
           set -euo pipefail
           mkdir -p release
+
           mapfile -t images < <(find openwrt/bin/targets -type f \
             -name '*arcadyan_aw1000*squashfs-sysupgrade.bin')
+
           if [[ ${#images[@]} -ne 1 ]]; then
             echo "::error::Expected exactly one AW1000 image"
-            find openwrt/bin/targets -type f -name '*.bin' -print
             exit 1
           fi
-          cp "${images[0]}" release/
-          cp "$(dirname "${images[0]}")/config.buildinfo" release/ 2>/dev/null || true
+
+          cp "${images[0]}" \
+            release/HornetWrt-AW1000-sysupgrade.bin
+
+          cp "$(dirname "${images[0]}")/config.buildinfo" \
+            release/ 2>/dev/null || true
+
           (cd release && sha256sum *.bin > SHA256SUMS)
-          echo "image=$(basename "${images[0]}")" >> "$GITHUB_OUTPUT"
+
+          echo "image=HornetWrt-AW1000-sysupgrade.bin" >> "$GITHUB_OUTPUT"
 
       - name: Upload firmware artifact
         uses: actions/upload-artifact@v4
