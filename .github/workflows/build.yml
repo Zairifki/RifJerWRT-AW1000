@@ -49,6 +49,23 @@ jobs:
           ccache --version
           mkdir -p "$CCACHE_DIR"
           ccache --max-size=5G
+          
+      - name: Download and verify friend-fixed AW1000 UBI
+        run: |
+          set -euo pipefail
+          mkdir -p reference
+
+          UBI="reference/hornetwrt-factory-fix.ubi"
+          URL="https://github.com/Zairifki/RifJerWRT-AW1000/releases/download/aw1000-fixed-ubi/hornetwrt-factory-fix.ubi"
+
+          curl -fL --retry 3 "$URL" -o "$UBI"
+
+          echo "f8b8c061edee6177458747a95ab6201a77d4e68f8fcb83fb0444eb3f221f91bd  $UBI" | sha256sum -c -
+
+          test "$(stat -c%s "$UBI")" -eq 46137344
+
+          echo "Fixed AW1000 UBI downloaded and verified."
+          ls -lh "$UBI"
 
       - name: Checkout OpenWrt PPE-NSS source
         uses: actions/checkout@v7
