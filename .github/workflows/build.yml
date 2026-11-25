@@ -214,17 +214,16 @@ jobs:
               esac
 
               iface=""
-              first_iface=""
-              for section in $(uci -q show wireless | sed -n 's/^wireless\.\([^.=]*\)=wifi-iface$/\1/p'); do
-                  [ "$(uci -q get "wireless.$section.device" 2>/dev/null || true)" = "$dev" ] || continue
-                  [ "$(uci -q get "wireless.$section.mode" 2>/dev/null || true)" = "ap" ] || continue
-                  [ -n "$first_iface" ] || first_iface="$section"
-                  case "$section" in
-                      default_radio*)
-                          iface="$section"
-                          break
-                          ;;
-                  esac
+
+              for section in $(uci -q show wireless | sed -n 's/^wireless\.\([^=]*\)=wifi-iface$/\1/p'); do
+              section_dev="$(uci -q get wireless.$section.device 2>/dev/null || true)"
+              section_mode="$(uci -q get wireless.$section.mode 2>/dev/null || true)"
+
+                   [ "$section_dev" = "$dev" ] || continue
+                   [ "$section_mode" = "ap" ] || continue
+
+                      iface="$section"
+                      break
               done
 
               [ -n "$iface" ] || iface="$first_iface"
