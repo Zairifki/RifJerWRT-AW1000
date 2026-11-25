@@ -103,6 +103,22 @@ jobs:
           set -euo pipefail
           bash builder/scripts/prepare-build.sh
 
+      - name: Fix PF_RING compatibility with Linux 6.18.64
+        run: |
+          set -euo pipefail
+          PATCH_DIR="openwrt/feeds/packages/libs/libpfring/patches"
+          mkdir -p "$PATCH_DIR"
+
+          cat > "$PATCH_DIR/003-fix-compilation-on-6.18.64.patch" <<'EOF'
+          --- a/kernel/pf_ring.c
+          +++ b/kernel/pf_ring.c
+          @@ -5851 +5851 @@
+          -static int ring_bind(struct socket *sock, struct sockaddr_unsized *sa, int addr_len)
+          +static int ring_bind(struct socket *sock, struct sockaddr *sa, int addr_len)
+          EOF
+
+          echo "PF_RING compatibility patch added."
+
       - name: Add PassWall 2 package
         working-directory: openwrt
         run: |
@@ -256,21 +272,15 @@ jobs:
             sleep 5
           done
 
-      
       - name: Compile firmware
         working-directory: openwrt
         run: |
-          set -uo pipefail
+          set -euo pipefail
 
           echo "===== BUILD START ====="
           date -u
 
-          make -j"$(nproc)" V=s 2>&1 | tee ../build.log || {
-            echo "===== PARALLEL BUILD FAILED ====="
-            echo "===== RETRY SINGLE JOB ====="
-
-            make -j1 V=s 2>&1 | tee -a ../build.log
-          }
+          make -j"$(nproc)" V=s 2>&1 | tee ../build.log
 
           echo "===== BUILD FINISHED ====="
           date -u
@@ -314,38 +324,6 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-      - name: Send firmware to Telegram
-        if: success()
-        env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: |
-          set -euo pipefail
-          IMAGE=$(find release -maxdepth 1 -type f -name '*.bin' -print -quit)
-          if [[ -z "$IMAGE" ]]; then
-            echo "::error::Firmware image not found"
-            exit 1
-          fi
-          IMAGE_SIZE=$(stat -c%s "$IMAGE")
-          if [[ "$IMAGE_SIZE" -le 49000000 ]]; then
-            curl --fail --silent --show-error \
-              -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendDocument" \
-              -F "chat_id=${TELEGRAM_CHAT_ID}" \
-              -F "document=@${IMAGE}" \
-              -F "caption=RifJerWrt AW1000 BUILD SUCCESS ✅ Build #${GITHUB_RUN_NUMBER}"
-          else
-            curl --fail --silent --show-error \
-              -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
-              -d "chat_id=${TELEGRAM_CHAT_ID}" \
-              --data-urlencode "text=Firmware berjaya dikompil tetapi terlalu besar untuk dihantar terus. Download: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
-          fi
-          if [[ -f release/SHA256SUMS ]]; then
-            curl --fail --silent --show-error \
-              -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendDocument" \
-              -F "chat_id=${TELEGRAM_CHAT_ID}" \
-              -F "document=@release/SHA256SUMS"
-          fi
-
       - name: Build summary
         run: |
           {
@@ -358,21 +336,3 @@ jobs:
             echo
             echo "Sysupgrade image only. Do not flash directly over stock vendor firmware."
           } >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Notify Telegram on build failure
-        if: failure()
-        env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: |
-          if [[ -z "${TELEGRAM_BOT_TOKEN:-}" || -z "${TELEGRAM_CHAT_ID:-}" ]]; then
-            echo "Telegram secrets are not configured; skipping failure notification."
-            exit 0
-          fi
-          curl --fail --silent --show-error \
-            -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
-            -d "chat_id=${TELEGRAM_CHAT_ID}" \
-            --data-urlencode "text=❌ RIFJERWRT BUILD FAILED
-          Repository: ${GITHUB_REPOSITORY}
-          Build: #${GITHUB_RUN_NUMBER}
-          Log: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
