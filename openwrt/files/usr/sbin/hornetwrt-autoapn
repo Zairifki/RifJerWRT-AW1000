@@ -3,7 +3,11 @@
 
 STATUS="/tmp/hornetwrt-autoapn.status"
 LOGTAG="hornetwrt-autoapn"
-INTERVAL=60
+CONFIG="/etc/config/hornetwrt-autoapn"
+APN_DB="/etc/hornetwrt/apn-db.csv"
+
+INTERVAL="$(uci -q get hornetwrt-autoapn.main.interval)"
+[ -n "$INTERVAL" ] || INTERVAL=60
 
 log_msg() {
     logger -t "$LOGTAG" "$*"
@@ -17,7 +21,10 @@ set_status() {
         echo "device=${3:-unknown}"
         echo "imsi=${4:-unknown}"
         echo "operator=${5:-unknown}"
+        echo "apn=${6:-unknown}"
+        echo "auto_apply=disabled"
     } > "$STATUS"
+
     log_msg "$1: $2"
 }
 
@@ -31,21 +38,21 @@ detect_modem() {
 }
 
 detect_qmi() {
-    local dev="$1"
+    dev="$1"
     command -v uqmi >/dev/null 2>&1 || return 1
 
     uqmi -s -d "$dev" -t 5000 --get-serving-system \
-        >/tmp/hornetwrt-serving.json 2>/dev/null || return 1
+        > /tmp/hornetwrt-serving.json 2>/dev/null || return 1
 
     grep -q '"registration"' /tmp/hornetwrt-serving.json
 }
 
 detect_mbim() {
-    local dev="$1"
+    dev="$1"
     command -v umbim >/dev/null 2>&1 || return 1
 
     umbim -d "$dev" -n caps \
-        >/tmp/hornetwrt-mbim.json 2>/dev/null
+        > /tmp/hornetwrt-mbim.json 2>/dev/null
 }
 
 get_imsi() {
@@ -54,13 +61,38 @@ get_imsi() {
 }
 
 get_operator() {
+    [ -f /tmp/hornetwrt-serving.json ] || return 1
+
     jsonfilter -i /tmp/hornetwrt-serving.json \
-        -e '@.plmn_description' 2>/dev/null | tr -d '"'
+        -e '@.plmn_description' 2>/dev/null |
+        tr -d '"'
+}
+
+lookup_apn() {
+    wanted="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')"
+
+    [ -n "$wanted" ] || return 1
+    [ -r "$APN_DB" ] || return 1
+
+    while IFS=, read -r name apn match state; do
+        case "$name" in
+            ""|\#*) continue ;;
+        esac
+
+        name="$(printf '%s' "$name" | tr '[:upper:]' '[:lower:]')"
+
+        case "$wanted" in
+            *"$name"*)
+                echo "$name|$apn|$match|$state"
+                return 0
+                ;;
+        esac
+    done < "$APN_DB"
+
+    return 1
 }
 
 scan_once() {
-    local dev imsi operator
-
     dev="$(detect_modem)" || {
         set_status "NO_MODEM" "Modem QMI/MBIM tidak dikesan."
         return 1
@@ -70,20 +102,42 @@ scan_once() {
         imsi="$(get_imsi "$dev")"
         operator="$(get_operator)"
 
-        set_status "QMI_DETECTED" \
-            "Modem QMI dikesan. APN belum diubah." \
-            "$dev" "$imsi" "$operator"
+        if [ -z "$operator" ]; then
+            set_status "OPERATOR_UNKNOWN" \
+                "Modem QMI dikesan tetapi nama operator tidak tersedia." \
+                "$dev" "$imsi"
+            return 0
+        fi
+
+        profile="$(lookup_apn "$operator")" || {
+            set_status "PROFILE_NOT_FOUND" \
+                "Operator tidak sepadan dengan database. APN tidak diubah." \
+                "$dev" "$imsi" "$operator"
+            return 0
+        }
+
+        IFS='|' read -r name apn match state <<EOF
+$profile
+EOF
+
+        set_status "PROFILE_MANUAL" \
+            "Profil dijumpai. Pengesahan APN diperlukan; tiada perubahan dibuat." \
+            "$dev" "$imsi" "$name" "${apn:-not-set}"
+
         return 0
     fi
 
     if detect_mbim "$dev"; then
         set_status "MBIM_DETECTED" \
-            "Modem MBIM dikesan. APN belum diubah." "$dev"
+            "Modem MBIM dikesan. Pengenalan operator belum disokong." \
+            "$dev"
         return 0
     fi
 
     set_status "MODEM_UNIDENTIFIED" \
-        "Peranti cdc-wdm ditemui tetapi protokol tidak dikenal pasti." "$dev"
+        "Peranti cdc-wdm ditemui tetapi protokol tidak dikenal pasti." \
+        "$dev"
+
     return 1
 }
 
@@ -92,8 +146,11 @@ case "$1" in
         scan_once
         ;;
     status)
-        [ -f "$STATUS" ] && cat "$STATUS" ||
+        if [ -f "$STATUS" ]; then
+            cat "$STATUS"
+        else
             echo "Status Auto APN belum tersedia."
+        fi
         ;;
     daemon)
         while true; do
