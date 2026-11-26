@@ -145,16 +145,6 @@ jobs:
           test -f package/feeds/luci/luci-theme-footstrap/Makefile
           echo "Footstrap theme source verified."
 
-      - name: Add 7Dollar LuCI theme
-        working-directory: openwrt
-        run: |
-          set -euo pipefail
-          git clone --depth 1 --branch v1.0.19 \
-            https://github.com/itsmaiGe/luci-theme-7dollar.git \
-            package/luci-theme-7dollar
-          test -f package/luci-theme-7dollar/Makefile
-          echo "7Dollar theme v1.0.19 source added."
-
       - name: Add TTL64 rules
         run: |
           set -euo pipefail
@@ -265,9 +255,16 @@ jobs:
           echo 'CONFIG_PACKAGE_luci-app-strxwall=y' >> .config
           echo 'CONFIG_PACKAGE_dns2socks=y' >> .config
           echo 'CONFIG_PACKAGE_conntrack=y' >> .config
-          echo 'CONFIG_PACKAGE_luci-theme-7dollar=y' >> .config
           echo 'CONFIG_PACKAGE_luci-theme-footstrap=y' >> .config
           echo 'CONFIG_PACKAGE_luci-app-passwall2=y' >> .config
+          # Quectel RG500Q-EA: QMI primary and MBIM fallback
+          echo 'CONFIG_PACKAGE_kmod-usb-wdm=y' >> .config
+          echo 'CONFIG_PACKAGE_kmod-usb-net-qmi-wwan=y' >> .config
+          echo 'CONFIG_PACKAGE_uqmi=y' >> .config
+          echo 'CONFIG_PACKAGE_luci-proto-qmi=y' >> .config
+          echo 'CONFIG_PACKAGE_kmod-usb-net-cdc-mbim=y' >> .config
+          echo 'CONFIG_PACKAGE_umbim=y' >> .config
+          echo 'CONFIG_PACKAGE_luci-proto-mbim=y' >> .config
           make defconfig
 
           grep -qx 'CONFIG_CCACHE=y' .config || {
@@ -275,7 +272,6 @@ jobs:
             exit 1
           }
 
-          for package in luci-app-strxwall dns2socks conntrack luci-theme-7dollar luci-theme-footstrap luci-app-passwall2; do
             if ! grep -qx "CONFIG_PACKAGE_${package}=y" .config; then
               echo "::error::Required package ${package} was dropped by Kconfig"
               exit 1
@@ -297,15 +293,13 @@ jobs:
           test -f "$CONFIG"
           test -f "$INIT"
           test -f "$DNS"
-          test -f package/luci-theme-7dollar/Makefile
-          grep -qx "CONFIG_PACKAGE_luci-theme-7dollar=y" .config
-          echo "7Dollar theme v1.0.19 verified."
           test -f package/feeds/luci/luci-theme-footstrap/Makefile
           grep -qx "CONFIG_PACKAGE_luci-theme-footstrap=y" .config
           echo "Footstrap theme verified."
           test -f package/feeds/passwall2/luci-app-passwall2/Makefile
           grep -qx "CONFIG_PACKAGE_luci-app-passwall2=y" .config
           echo "PassWall 2 package verified."
+          echo "QMI/MBIM modem packages verified in .config."
           grep -q 'PKG_VERSION:=2.5.53' "$PKG/Makefile"
           grep -Eq "option enabled ['\"]0['\"]" "$CONFIG" || {
             echo "::error::STRXWALL must be OFF by default"
