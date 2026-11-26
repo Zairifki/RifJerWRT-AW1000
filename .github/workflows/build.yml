@@ -131,6 +131,40 @@ jobs:
           set -euo pipefail
           bash builder/scripts/prepare-build.sh
 
+      - name: Install HornetWrt Auto APN files
+        run: |
+          set -euo pipefail
+
+          SRC="rifjerwrt/openwrt/files"
+          DST="openwrt/files"
+
+          test -f "$SRC/usr/sbin/hornetwrt-autoapn"
+          test -f "$SRC/etc/init.d/hornetwrt-autoapn"
+          test -f "$SRC/etc/config/hornetwrt-autoapn"
+
+          mkdir -p "$DST"
+          cp -a "$SRC"/. "$DST"/
+
+          chmod 0755 "$DST/usr/sbin/hornetwrt-autoapn"
+          chmod 0755 "$DST/etc/init.d/hornetwrt-autoapn"
+
+          mkdir -p "$DST/etc/uci-defaults"
+
+          cat > "$DST/etc/uci-defaults/99-hornetwrt-autoapn" <<'EOF'
+          #!/bin/sh
+          /etc/init.d/hornetwrt-autoapn enable
+          /etc/init.d/hornetwrt-autoapn start
+          exit 0
+          EOF
+
+          chmod 0755 "$DST/etc/uci-defaults/99-hornetwrt-autoapn"
+
+          test -x "$DST/usr/sbin/hornetwrt-autoapn"
+          test -x "$DST/etc/init.d/hornetwrt-autoapn"
+          test -s "$DST/etc/config/hornetwrt-autoapn"
+
+          echo "HornetWrt Auto APN files installed successfully."
+
       - name: Patch PF_RING for OpenWrt Linux 6.18.64
         run: |
           set -euo pipefail
