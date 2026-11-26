@@ -1,7 +1,14 @@
 
-# operator,apn,status
-maxis,unet,verified
-hotlink,unet,verified
-celcom,celcom3g,verified
-digi,diginet,verified
-unifi,unifi,verified
+# operator,apn,match,status
+maxis,,manual,manual
+hotlink,,manual,manual
+celcom,,manual,manual
+digi,,manual,manual
+celcomdigi,,manual,manual
+umobile,,manual,manual
+unifi,,manual,manual
+yes,,manual,manual
+tunetalk,,manual,manual
+onexox,,manual,manual
+redone,,manual,manual
+mvno-unknown,,manual,manual
