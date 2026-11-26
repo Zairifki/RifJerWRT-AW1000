@@ -131,7 +131,7 @@ jobs:
       - name: Add local STRXWALL package
         run: |
           set -euo pipefail
-          ZIP="$GITHUB_WORKSPACE/rifjerwrt/RifJerWrt-packages-strxwall-layout.zip"
+          ZIP="$GITHUB_WORKSPACE/rifjerwrt/RifjerWrt-packages-strxwall-layout.zip"
           test -f "$ZIP"
 
           mkdir -p "$RUNNER_TEMP/strxwall-package"
