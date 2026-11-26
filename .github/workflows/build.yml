@@ -29,6 +29,8 @@ jobs:
         src-git luci https://github.com/JuliusBairaktaris/luci.git;luci-app-ppe-qos
         src-git passwall_packages https://github.com/Openwrt-Passwall/openwrt-passwall-packages.git;main
         src-git passwall2 https://github.com/Openwrt-Passwall/openwrt-passwall2.git;main
+        src-link aw1000 ${{ github.workspace }}/aw1000-feed
+        src-git luci_smstool https://github.com/4IceG/luci-app-sms-tool-js.git
 
     steps:
       - name: Checkout RifjerWrt custom files
@@ -49,7 +51,7 @@ jobs:
           ccache --version
           mkdir -p "$CCACHE_DIR"
           ccache --max-size=5G
-          
+
       - name: Download and verify friend-fixed AW1000 UBI
         run: |
           set -euo pipefail
@@ -83,7 +85,15 @@ jobs:
           fetch-depth: 1
           path: builder
 
-      - name: Enable AW1000 5G modem packages
+      - name: Checkout AW1000 package feed
+        uses: actions/checkout@v7
+        with:
+          repository: XT-Martinez/aw1000-feed
+          ref: main
+          fetch-depth: 1
+          path: aw1000-feed
+
+      - name: Add AW1000 Quectel modem configuration
         run: |
           set -euo pipefail
 
@@ -92,30 +102,29 @@ jobs:
 
           cat >> "$CONFIG" <<'EOF'
 
-          # HornetWrt AW1000 - Quectel RG500Q-EA QMI support
           # HornetWrt AW1000 - Quectel RG500Q-EA
+          CONFIG_PACKAGE_kmod-qmi_wwan_q=y
+          CONFIG_PACKAGE_quectel-cm=y
+          CONFIG_PACKAGE_luci-proto-quectel=y
+          CONFIG_PACKAGE_sms-tool=y
           CONFIG_PACKAGE_kmod-usb-wdm=y
           CONFIG_PACKAGE_kmod-usb-net=y
-          CONFIG_PACKAGE_kmod-qmi_wwan_q=y
           CONFIG_PACKAGE_kmod-usb-serial=y
           CONFIG_PACKAGE_kmod-usb-serial-option=y
-          CONFIG_PACKAGE_quectel-cm=y
-          CONFIG_PACKAGE_sms-tool=y
-          CONFIG_PACKAGE_wwan=y
           CONFIG_PACKAGE_usbutils=y
 
-          # Optional MBIM support
-          CONFIG_PACKAGE_kmod-usb-net-cdc-mbim=y
-          CONFIG_PACKAGE_umbim=y
-          CONFIG_PACKAGE_luci-proto-mbim=y
+          # Do not use the standard QMI driver with the Quectel driver
+          # CONFIG_PACKAGE_uqmi is not set
+          # CONFIG_PACKAGE_kmod-usb-net-qmi-wwan is not set
+          # CONFIG_PACKAGE_luci-proto-qmi is not set
           EOF
 
-          echo "AW1000 QMI/MBIM modem packages added."
+          echo "AW1000 Quectel configuration added."
 
       - name: Add local STRXWALL package
         run: |
           set -euo pipefail
-          ZIP="$GITHUB_WORKSPACE/rifjerwrt/RifjerWrt-packages-strxwall-layout.zip"
+          ZIP="$GITHUB_WORKSPACE/rifjerwrt/RifJerWrt-packages-strxwall-layout.zip"
           test -f "$ZIP"
           mkdir -p "$RUNNER_TEMP/strxwall-package"
           unzip -q "$ZIP" -d "$RUNNER_TEMP/strxwall-package"
@@ -167,7 +176,7 @@ jobs:
 
           echo "HornetWrt Auto APN files installed successfully."
 
-      - name: Patch PF_RING for OpenWrt Linux 6.18.64
+      - name: Patch PF_RING for OpenWrt Linux 6.18
         run: |
           set -euo pipefail
           PATCH_DIR="openwrt/feeds/packages/libs/libpfring/patches"
@@ -186,7 +195,7 @@ jobs:
            {
           EOF
 
-          echo "PF_RING Linux 6.18 compatibility patch staged."
+          echo "PF_RING compatibility patch staged."
 
       - name: Add PassWall 2 package
         working-directory: openwrt
@@ -270,16 +279,16 @@ jobs:
               iface=""
 
               for section in $(uci -q show wireless | sed -n 's/^wireless\.\([^=]*\)=wifi-iface$/\1/p'); do
-              section_dev="$(uci -q get wireless.$section.device 2>/dev/null || true)"
-              section_mode="$(uci -q get wireless.$section.mode 2>/dev/null || true)"
+                  section_dev="$(uci -q get "wireless.$section.device" 2>/dev/null || true)"
+                  section_mode="$(uci -q get "wireless.$section.mode" 2>/dev/null || true)"
 
-                   [ "$section_dev" = "$dev" ] || continue
-                   [ "$section_mode" = "ap" ] || continue
+                  [ "$section_dev" = "$dev" ] || continue
+                  [ "$section_mode" = "ap" ] || continue
 
-                      iface="$section"
-                      break
+                  iface="$section"
+                  break
               done
-              
+
               if [ -z "$iface" ]; then
                   iface="hornet_$dev"
                   uci set "wireless.$iface=wifi-iface"
@@ -293,24 +302,25 @@ jobs:
               uci set "wireless.$iface.key=password"
               uci set "wireless.$iface.disabled=0"
           done
-          
+
           [ "$found_2g" = "1" ] || {
-          echo "ERROR: 2.4GHz radio not detected"
-          exit 1
+              echo "ERROR: 2.4GHz radio not detected"
+              exit 1
           }
 
           [ "$found_5g" = "1" ] || {
-            echo "ERROR: 5GHz radio not detected"
-            exit 1
+              echo "ERROR: 5GHz radio not detected"
+              exit 1
           }
+
           uci commit wireless
-          logger -t hornetwrt "WiFi defaults applied (2.4 GHz: $found_2g, 5 GHz: $found_5g)"
+          logger -t hornetwrt "WiFi defaults applied"
           exit 0
           EOF
 
           chmod 0755 "$DIR/99zz-hornetwrt-wireless"
-          echo "HornetWrt 2.4 GHz and 5 GHz WiFi defaults prepared."
-      
+          echo "HornetWrt WiFi defaults prepared."
+
       - name: Enable HornetWrt packages and ccache
         working-directory: openwrt
         run: |
@@ -325,22 +335,23 @@ jobs:
           echo 'CONFIG_PACKAGE_luci-theme-footstrap=y' >> .config
           echo 'CONFIG_PACKAGE_luci-app-passwall2=y' >> .config
 
-          # Quectel RG500Q-EA QMI / MBIM
+          # Quectel RG500Q-EA - AW1000 native modem stack
+          echo 'CONFIG_PACKAGE_kmod-qmi_wwan_q=y' >> .config
+          echo 'CONFIG_PACKAGE_quectel-cm=y' >> .config
+          echo 'CONFIG_PACKAGE_luci-proto-quectel=y' >> .config
+          echo 'CONFIG_PACKAGE_sms-tool=y' >> .config
           echo 'CONFIG_PACKAGE_kmod-usb-wdm=y' >> .config
           echo 'CONFIG_PACKAGE_kmod-usb-net=y' >> .config
-          echo 'CONFIG_PACKAGE_kmod-usb-net-qmi-wwan=y' >> .config
           echo 'CONFIG_PACKAGE_kmod-usb-serial=y' >> .config
           echo 'CONFIG_PACKAGE_kmod-usb-serial-option=y' >> .config
-          echo 'CONFIG_PACKAGE_uqmi=y' >> .config
-          echo 'CONFIG_PACKAGE_wwan=y' >> .config
-          echo 'CONFIG_PACKAGE_luci-proto-qmi=y' >> .config
           echo 'CONFIG_PACKAGE_usbutils=y' >> .config
 
-          echo 'CONFIG_PACKAGE_kmod-usb-net-cdc-mbim=y' >> .config
-          echo 'CONFIG_PACKAGE_umbim=y' >> .config
-          echo 'CONFIG_PACKAGE_luci-proto-mbim=y' >> .config
+          # Keep standard QMI driver disabled
+          echo '# CONFIG_PACKAGE_uqmi is not set' >> .config
+          echo '# CONFIG_PACKAGE_kmod-usb-net-qmi-wwan is not set' >> .config
+          echo '# CONFIG_PACKAGE_luci-proto-qmi is not set' >> .config
 
-          # Per-device data usage monitoring
+          # Data usage monitoring
           echo 'CONFIG_PACKAGE_nlbwmon=y' >> .config
           echo 'CONFIG_PACKAGE_luci-app-nlbwmon=y' >> .config
 
@@ -351,49 +362,69 @@ jobs:
             exit 1
           }
 
-          for pkg in luci-app-strxwall dns2socks conntrack luci-theme-footstrap luci-app-passwall2 nlbwmon luci-app-nlbwmon kmod-usb-wdm kmod-usb-net-qmi-wwan uqmi luci-proto-qmi kmod-usb-net-cdc-mbim umbim luci-proto-mbim; do
+          for pkg in \
+            luci-app-strxwall dns2socks conntrack luci-theme-footstrap \
+            luci-app-passwall2 nlbwmon luci-app-nlbwmon \
+            kmod-qmi_wwan_q quectel-cm luci-proto-quectel sms-tool \
+            kmod-usb-wdm kmod-usb-net kmod-usb-serial \
+            kmod-usb-serial-option usbutils; do
             if ! grep -qx "CONFIG_PACKAGE_${pkg}=y" .config; then
               echo "::error::Required package ${pkg} was dropped by Kconfig"
               exit 1
             fi
           done
 
+          for pkg in uqmi kmod-usb-net-qmi-wwan luci-proto-qmi; do
+            if grep -q "^CONFIG_PACKAGE_${pkg}=y" .config; then
+              echo "::error::Conflicting standard QMI package enabled: ${pkg}"
+              exit 1
+            fi
+          done
+
           echo "=== Package manager configuration ==="
           grep -E '^(CONFIG_USE_APK|CONFIG_PACKAGE_MANAGER)' .config || true
-          echo "HornetWrt modem and monitoring packages verified."
+          echo "HornetWrt packages verified."
 
-      - name: Verify STRXWALL package payload
+      - name: Verify STRXWALL and modem package payload
         working-directory: openwrt
         run: |
           set -euo pipefail
+
           PKG="package/strxwall/luci-app-strxwall"
           CONFIG="$PKG/files/etc/config/strxwall"
           INIT="$PKG/files/etc/init.d/strxwall"
           DNS="$PKG/files/usr/libexec/strxwall-dns"
+
           test -f "$PKG/Makefile"
           test -f "$CONFIG"
           test -f "$INIT"
           test -f "$DNS"
+
           test -f package/feeds/luci/luci-theme-footstrap/Makefile
           grep -qx "CONFIG_PACKAGE_luci-theme-footstrap=y" .config
-          echo "Footstrap theme verified."
+
           test -f package/feeds/passwall2/luci-app-passwall2/Makefile
           grep -qx "CONFIG_PACKAGE_luci-app-passwall2=y" .config
-          echo "PassWall 2 package verified."
-          echo "QMI/MBIM modem packages verified in .config."
+
+          test -f package/feeds/aw1000/luci-proto-quectel/Makefile
+          test -f package/feeds/aw1000/quectel-cm/Makefile
+          test -f package/feeds/aw1000/qmi_wwan_q/Makefile
+
           grep -q 'PKG_VERSION:=2.5.53' "$PKG/Makefile"
+
           grep -Eq "option enabled ['\"]0['\"]" "$CONFIG" || {
             echo "::error::STRXWALL must be OFF by default"
             exit 1
           }
-          grep -q "CONFIG_PACKAGE_luci-app-strxwall=y" .config
-          grep -q "CONFIG_PACKAGE_dns2socks=y" .config
-          grep -q "CONFIG_PACKAGE_conntrack=y" .config
-          echo "STRXWALL package payload verified."
+
+          grep -qx "CONFIG_PACKAGE_luci-app-strxwall=y" .config
+          grep -qx "CONFIG_PACKAGE_dns2socks=y" .config
+          grep -qx "CONFIG_PACKAGE_conntrack=y" .config
+
+          echo "STRXWALL package version: 2.5.53"
           echo "STRXWALL default state: OFF"
-          echo "Package version: 2.5.53"
-          echo "=== Package manager ==="
-          grep -E '^(CONFIG_USE_APK|CONFIG_PACKAGE_MANAGER)' .config || true
+          echo "Quectel AW1000 packages verified."
+          echo "Footstrap and PassWall 2 verified."
 
       - name: Restore OpenWrt download and compiler caches
         uses: actions/cache@v4
@@ -453,7 +484,7 @@ jobs:
         if: always()
         run: |
           ccache --show-stats || true
-      
+
       - name: Collect HornetWrt AW1000 firmware
         id: image
         run: |
@@ -468,8 +499,7 @@ jobs:
             exit 1
           fi
 
-          cp "${images[0]}" \
-            release/HornetWrt-AW1000-sysupgrade.bin
+          cp "${images[0]}" release/HornetWrt-AW1000-sysupgrade.bin
 
           cp "$(dirname "${images[0]}")/config.buildinfo" \
             release/ 2>/dev/null || true
