@@ -1,0 +1,108 @@
+
+#!/bin/sh
+
+STATUS="/tmp/hornetwrt-autoapn.status"
+LOGTAG="hornetwrt-autoapn"
+INTERVAL=60
+
+log_msg() {
+    logger -t "$LOGTAG" "$*"
+}
+
+set_status() {
+    {
+        echo "time=$(date '+%Y-%m-%d %H:%M:%S')"
+        echo "status=$1"
+        echo "message=$2"
+        echo "device=${3:-unknown}"
+        echo "imsi=${4:-unknown}"
+        echo "operator=${5:-unknown}"
+    } > "$STATUS"
+    log_msg "$1: $2"
+}
+
+detect_modem() {
+    for dev in /dev/cdc-wdm*; do
+        [ -c "$dev" ] || continue
+        echo "$dev"
+        return 0
+    done
+    return 1
+}
+
+detect_qmi() {
+    local dev="$1"
+    command -v uqmi >/dev/null 2>&1 || return 1
+
+    uqmi -s -d "$dev" -t 5000 --get-serving-system \
+        >/tmp/hornetwrt-serving.json 2>/dev/null || return 1
+
+    grep -q '"registration"' /tmp/hornetwrt-serving.json
+}
+
+detect_mbim() {
+    local dev="$1"
+    command -v umbim >/dev/null 2>&1 || return 1
+
+    umbim -d "$dev" -n caps \
+        >/tmp/hornetwrt-mbim.json 2>/dev/null
+}
+
+get_imsi() {
+    uqmi -s -d "$1" -t 5000 --get-imsi 2>/dev/null |
+        tr -cd '0-9' | head -c 16
+}
+
+get_operator() {
+    jsonfilter -i /tmp/hornetwrt-serving.json \
+        -e '@.plmn_description' 2>/dev/null | tr -d '"'
+}
+
+scan_once() {
+    local dev imsi operator
+
+    dev="$(detect_modem)" || {
+        set_status "NO_MODEM" "Modem QMI/MBIM tidak dikesan."
+        return 1
+    }
+
+    if detect_qmi "$dev"; then
+        imsi="$(get_imsi "$dev")"
+        operator="$(get_operator)"
+
+        set_status "QMI_DETECTED" \
+            "Modem QMI dikesan. APN belum diubah." \
+            "$dev" "$imsi" "$operator"
+        return 0
+    fi
+
+    if detect_mbim "$dev"; then
+        set_status "MBIM_DETECTED" \
+            "Modem MBIM dikesan. APN belum diubah." "$dev"
+        return 0
+    fi
+
+    set_status "MODEM_UNIDENTIFIED" \
+        "Peranti cdc-wdm ditemui tetapi protokol tidak dikenal pasti." "$dev"
+    return 1
+}
+
+case "$1" in
+    scan)
+        scan_once
+        ;;
+    status)
+        [ -f "$STATUS" ] && cat "$STATUS" ||
+            echo "Status Auto APN belum tersedia."
+        ;;
+    daemon)
+        while true; do
+            scan_once
+            sleep "$INTERVAL"
+        done
+        ;;
+    *)
+        echo "Penggunaan: $0 {scan|status|daemon}"
+        exit 1
+        ;;
+esac
