@@ -141,6 +141,7 @@ jobs:
           test -f "$SRC/usr/sbin/hornetwrt-autoapn"
           test -f "$SRC/etc/init.d/hornetwrt-autoapn"
           test -f "$SRC/etc/config/hornetwrt-autoapn"
+          test -f "$SRC/etc/hornetwrt/apn-db.csv"
 
           mkdir -p "$DST"
           cp -a "$SRC"/. "$DST"/
