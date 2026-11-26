@@ -30,7 +30,8 @@ jobs:
         src-git passwall_packages https://github.com/Openwrt-Passwall/openwrt-passwall-packages.git;main
         src-git passwall2 https://github.com/Openwrt-Passwall/openwrt-passwall2.git;main
         src-link aw1000 ${{ github.workspace }}/aw1000-feed
-        src-git luci_smstool https://github.com/4IceG/luci-app-sms-tool-js.git
+        src-git luci_smstool https://github.com/4IceG/luci-app-sms-tool-js.git^0bd41a0b64fa9a41272f391fcd0900fc1115af6e
+        src-git footstrap https://github.com/VizzleTF/luci-theme-footstrap.git^ef68bbbb3a975a5eaa923b37a98e81a4ee005296
 
     steps:
       - name: Checkout RifjerWrt custom files
@@ -52,21 +53,18 @@ jobs:
           mkdir -p "$CCACHE_DIR"
           ccache --max-size=5G
 
-      - name: Download and verify friend-fixed AW1000 UBI
+      - name: Download and verify fixed AW1000 UBI
         run: |
           set -euo pipefail
           mkdir -p reference
-
           UBI="reference/hornetwrt-factory-fix.ubi"
           URL="https://github.com/Zairifki/RifJerWRT-AW1000/releases/download/aw1000-fixed-ubi/hornetwrt-factory-fix.ubi"
 
           curl -fL --retry 3 "$URL" -o "$UBI"
-
           echo "f8b8c061edee6177458747a95ab6201a77d4e68f8fcb83fb0444eb3f221f91bd  $UBI" | sha256sum -c -
-
           test "$(stat -c%s "$UBI")" -eq 46137344
 
-          echo "Fixed AW1000 UBI downloaded and verified."
+          echo "Fixed AW1000 UBI verified."
           ls -lh "$UBI"
 
       - name: Checkout OpenWrt PPE-NSS source
@@ -93,10 +91,43 @@ jobs:
           fetch-depth: 1
           path: aw1000-feed
 
+      - name: Remove conflicting standard QMI package from AW1000 profile
+        working-directory: openwrt
+        run: |
+          set -euo pipefail
+          FILE="target/linux/qualcommax/image/ipq807x.mk"
+          test -f "$FILE"
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path("target/linux/qualcommax/image/ipq807x.mk")
+          s = p.read_text()
+
+          old = (
+              "\tDEVICE_PACKAGES := ipq-wifi-arcadyan_aw1000 kmod-spi-gpio \\\n"
+              "\t\tkmod-gpio-nxp-74hc164 uqmi"
+          )
+          new = (
+              "\tDEVICE_PACKAGES := ipq-wifi-arcadyan_aw1000 kmod-spi-gpio \\\n"
+              "\t\tkmod-gpio-nxp-74hc164"
+          )
+
+          if s.count(old) != 1:
+              raise SystemExit(
+                  "ERROR: AW1000 DEVICE_PACKAGES block did not match exactly once. "
+                  "Stop build rather than applying an uncertain edit."
+              )
+
+          p.write_text(s.replace(old, new, 1))
+          print("Removed uqmi from AW1000 device package list.")
+          PY
+
+          ! grep -A5 -B2 'Device/arcadyan_aw1000' "$FILE" | grep -q 'uqmi'
+
       - name: Add AW1000 Quectel modem configuration
         run: |
           set -euo pipefail
-
           CONFIG="builder/devices/common/config"
           test -f "$CONFIG"
 
@@ -104,6 +135,7 @@ jobs:
 
           # HornetWrt AW1000 - Quectel RG500Q-EA
           CONFIG_PACKAGE_kmod-qmi_wwan_q=y
+          CONFIG_QMI_WWAN_Q_QMAP_MODE=2
           CONFIG_PACKAGE_quectel-cm=y
           CONFIG_PACKAGE_luci-proto-quectel=y
           CONFIG_PACKAGE_sms-tool=y
@@ -113,7 +145,7 @@ jobs:
           CONFIG_PACKAGE_kmod-usb-serial-option=y
           CONFIG_PACKAGE_usbutils=y
 
-          # Do not use the standard QMI driver with the Quectel driver
+          # Do not use standard QMI packages with the Quectel driver
           # CONFIG_PACKAGE_uqmi is not set
           # CONFIG_PACKAGE_kmod-usb-net-qmi-wwan is not set
           # CONFIG_PACKAGE_luci-proto-qmi is not set
@@ -126,10 +158,13 @@ jobs:
           set -euo pipefail
           ZIP="$GITHUB_WORKSPACE/rifjerwrt/RifJerWrt-packages-strxwall-layout.zip"
           test -f "$ZIP"
+
           mkdir -p "$RUNNER_TEMP/strxwall-package"
           unzip -q "$ZIP" -d "$RUNNER_TEMP/strxwall-package"
+
           SRC="$RUNNER_TEMP/strxwall-package/packages/strxwall/luci-app-strxwall"
           test -f "$SRC/Makefile"
+
           mkdir -p openwrt/package/strxwall/luci-app-strxwall
           cp -a "$SRC"/. openwrt/package/strxwall/luci-app-strxwall/
 
@@ -144,7 +179,6 @@ jobs:
       - name: Install HornetWrt Auto APN files
         run: |
           set -euo pipefail
-
           SRC="rifjerwrt/openwrt/files"
           DST="openwrt/files"
 
@@ -160,7 +194,6 @@ jobs:
           chmod 0755 "$DST/etc/init.d/hornetwrt-autoapn"
 
           mkdir -p "$DST/etc/uci-defaults"
-
           cat > "$DST/etc/uci-defaults/99-hornetwrt-autoapn" <<'EOF'
           #!/bin/sh
           /etc/init.d/hornetwrt-autoapn enable
@@ -169,14 +202,13 @@ jobs:
           EOF
 
           chmod 0755 "$DST/etc/uci-defaults/99-hornetwrt-autoapn"
-
           test -x "$DST/usr/sbin/hornetwrt-autoapn"
           test -x "$DST/etc/init.d/hornetwrt-autoapn"
           test -s "$DST/etc/config/hornetwrt-autoapn"
 
-          echo "HornetWrt Auto APN files installed successfully."
+          echo "HornetWrt Auto APN files installed."
 
-      - name: Patch PF_RING for OpenWrt Linux 6.18
+      - name: Patch PF_RING for Linux 6.18
         run: |
           set -euo pipefail
           PATCH_DIR="openwrt/feeds/packages/libs/libpfring/patches"
@@ -185,7 +217,7 @@ jobs:
           cat > "$PATCH_DIR/100-openwrt-linux-6.18-sockaddr.patch" <<'EOF'
           --- a/kernel/pf_ring.c
           +++ b/kernel/pf_ring.c
-          @@ -5848,7 +5848,3 @@
+          @@ -5848,5 +5848,1 @@
            /* Bind to a device */
           -#if LINUX_VERSION_CODE >= KERNEL_VERSION(6,19,0)
           -static int ring_bind(struct socket *sock, struct sockaddr_unsized *sa, int addr_len)
@@ -195,7 +227,7 @@ jobs:
            {
           EOF
 
-          echo "PF_RING compatibility patch staged."
+          echo "PF_RING patch staged."
 
       - name: Add PassWall 2 package
         working-directory: openwrt
@@ -210,12 +242,9 @@ jobs:
         working-directory: openwrt
         run: |
           set -euo pipefail
-          if [ ! -f feeds/luci/themes/luci-theme-footstrap/Makefile ]; then
-            echo "::error::Footstrap is missing from the LuCI feed"
-            exit 1
-          fi
-          ./scripts/feeds install luci-theme-footstrap
-          test -f package/feeds/luci/luci-theme-footstrap/Makefile
+          test -f feeds/footstrap/luci-theme-footstrap/Makefile
+          ./scripts/feeds install -p footstrap luci-theme-footstrap
+          test -f package/feeds/footstrap/luci-theme-footstrap/Makefile
           echo "Footstrap theme source verified."
 
       - name: Add TTL64 rules
@@ -223,10 +252,12 @@ jobs:
           set -euo pipefail
           DIR="openwrt/files/usr/share/nftables.d/chain-post/mangle_postrouting"
           mkdir -p "$DIR"
+
           cat > "$DIR/99-ttl64.nft" <<'EOF'
           oifname $wan_devices counter ip ttl set 64
           oifname $wan_devices counter ip6 hoplimit set 64
           EOF
+
           test -s "$DIR/99-ttl64.nft"
           echo "TTL64 IPv4 and IPv6 rules added."
 
@@ -235,15 +266,16 @@ jobs:
           set -euo pipefail
           DIR="openwrt/files/etc/uci-defaults"
           mkdir -p "$DIR"
+
           cat > "$DIR/99-rifjerwrt-default-theme" <<'EOF'
           #!/bin/sh
           uci -q set luci.main.mediaurlbase='/luci-static/footstrap'
           uci -q commit luci
           exit 0
           EOF
+
           chmod 0755 "$DIR/99-rifjerwrt-default-theme"
           test -s "$DIR/99-rifjerwrt-default-theme"
-          echo "Footstrap configured as default LuCI theme."
 
       - name: Configure HornetWrt WiFi defaults
         run: |
@@ -261,15 +293,20 @@ jobs:
           for dev in $(uci -q show wireless | sed -n 's/^wireless\.\([^.=]*\)=wifi-device$/\1/p'); do
               band="$(uci -q get "wireless.$dev.band" 2>/dev/null || true)"
               hwmode="$(uci -q get "wireless.$dev.hwmode" 2>/dev/null || true)"
+              channel="$(uci -q get "wireless.$dev.channel" 2>/dev/null || true)"
 
-              case "$band:$hwmode" in
-                  2g:*|*:11b|*:11g|*:11ng)
+              case "$band:$hwmode:$channel" in
+                  2g:*:*|*:11b:*|*:11g:*|*:11ng:*)
                       ssid="HornetWrt_2G"
                       found_2g=1
                       ;;
-                  5g:*|*:11a|*:11ac|*:11axa|*:11ax)
+                  5g:*:*|*:11a:*|*:11ac:*|*:11axa:*|*:11ax:*)
                       ssid="HornetWrt_5G"
                       found_5g=1
+                      ;;
+                  *:*:1|*:*:2|*:*:3|*:*:4|*:*:5|*:*:6|*:*:7|*:*:8|*:*:9|*:*:10|*:*:11|*:*:12|*:*:13|*:*:14)
+                      ssid="HornetWrt_2G"
+                      found_2g=1
                       ;;
                   *)
                       continue
@@ -277,14 +314,11 @@ jobs:
               esac
 
               iface=""
-
               for section in $(uci -q show wireless | sed -n 's/^wireless\.\([^=]*\)=wifi-iface$/\1/p'); do
                   section_dev="$(uci -q get "wireless.$section.device" 2>/dev/null || true)"
                   section_mode="$(uci -q get "wireless.$section.mode" 2>/dev/null || true)"
-
                   [ "$section_dev" = "$dev" ] || continue
                   [ "$section_mode" = "ap" ] || continue
-
                   iface="$section"
                   break
               done
@@ -335,8 +369,9 @@ jobs:
           echo 'CONFIG_PACKAGE_luci-theme-footstrap=y' >> .config
           echo 'CONFIG_PACKAGE_luci-app-passwall2=y' >> .config
 
-          # Quectel RG500Q-EA - AW1000 native modem stack
+          # Quectel RG500Q-EA
           echo 'CONFIG_PACKAGE_kmod-qmi_wwan_q=y' >> .config
+          echo 'CONFIG_QMI_WWAN_Q_QMAP_MODE=2' >> .config
           echo 'CONFIG_PACKAGE_quectel-cm=y' >> .config
           echo 'CONFIG_PACKAGE_luci-proto-quectel=y' >> .config
           echo 'CONFIG_PACKAGE_sms-tool=y' >> .config
@@ -346,7 +381,7 @@ jobs:
           echo 'CONFIG_PACKAGE_kmod-usb-serial-option=y' >> .config
           echo 'CONFIG_PACKAGE_usbutils=y' >> .config
 
-          # Keep standard QMI driver disabled
+          # Disable standard QMI packages
           echo '# CONFIG_PACKAGE_uqmi is not set' >> .config
           echo '# CONFIG_PACKAGE_kmod-usb-net-qmi-wwan is not set' >> .config
           echo '# CONFIG_PACKAGE_luci-proto-qmi is not set' >> .config
@@ -368,10 +403,10 @@ jobs:
             kmod-qmi_wwan_q quectel-cm luci-proto-quectel sms-tool \
             kmod-usb-wdm kmod-usb-net kmod-usb-serial \
             kmod-usb-serial-option usbutils; do
-            if ! grep -qx "CONFIG_PACKAGE_${pkg}=y" .config; then
+            grep -qx "CONFIG_PACKAGE_${pkg}=y" .config || {
               echo "::error::Required package ${pkg} was dropped by Kconfig"
               exit 1
-            fi
+            }
           done
 
           for pkg in uqmi kmod-usb-net-qmi-wwan luci-proto-qmi; do
@@ -400,7 +435,7 @@ jobs:
           test -f "$INIT"
           test -f "$DNS"
 
-          test -f package/feeds/luci/luci-theme-footstrap/Makefile
+          test -f package/feeds/footstrap/luci-theme-footstrap/Makefile
           grep -qx "CONFIG_PACKAGE_luci-theme-footstrap=y" .config
 
           test -f package/feeds/passwall2/luci-app-passwall2/Makefile
@@ -421,10 +456,9 @@ jobs:
           grep -qx "CONFIG_PACKAGE_dns2socks=y" .config
           grep -qx "CONFIG_PACKAGE_conntrack=y" .config
 
-          echo "STRXWALL package version: 2.5.53"
-          echo "STRXWALL default state: OFF"
-          echo "Quectel AW1000 packages verified."
-          echo "Footstrap and PassWall 2 verified."
+          echo "STRXWALL version 2.5.53 verified."
+          echo "STRXWALL default state: OFF."
+          echo "Quectel, Footstrap and PassWall 2 verified."
 
       - name: Restore OpenWrt download and compiler caches
         uses: actions/cache@v4
@@ -451,7 +485,7 @@ jobs:
             if make download -j"$(nproc)"; then
               exit 0
             fi
-            if [[ "$attempt" -eq 3 ]]; then
+            if [ "$attempt" -eq 3 ]; then
               echo "::error::Source download failed after 3 attempts"
               exit 1
             fi
@@ -462,12 +496,9 @@ jobs:
         working-directory: openwrt
         run: |
           set -euo pipefail
-
           echo "===== BUILD START ====="
           date -u
-
           make -j"$(nproc)" V=s 2>&1 | tee ../build.log
-
           echo "===== BUILD FINISHED ====="
           date -u
 
@@ -491,10 +522,12 @@ jobs:
           set -euo pipefail
           mkdir -p release
 
-          mapfile -t images < <(find openwrt/bin/targets -type f \
-            -name '*arcadyan_aw1000*squashfs-sysupgrade.bin')
+          mapfile -t images < <(
+            find openwrt/bin/targets -type f \
+              -name '*arcadyan_aw1000*squashfs-sysupgrade.bin'
+          )
 
-          if [[ ${#images[@]} -ne 1 ]]; then
+          if [ "${#images[@]}" -ne 1 ]; then
             echo "::error::Expected exactly one AW1000 image"
             exit 1
           fi
@@ -505,7 +538,6 @@ jobs:
             release/ 2>/dev/null || true
 
           (cd release && sha256sum *.bin > SHA256SUMS)
-
           echo "image=HornetWrt-AW1000-sysupgrade.bin" >> "$GITHUB_OUTPUT"
 
       - name: Upload firmware artifact
