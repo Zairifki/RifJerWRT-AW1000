@@ -127,21 +127,6 @@ jobs:
       # Quectel package selection is performed after feeds are installed,
       # immediately before the final make defconfig step.
 
-      - name: Add local STRXWALL package
-        run: |
-          set -euo pipefail
-          ZIP="$GITHUB_WORKSPACE/rifjerwrt/RifjerWrt-packages-strxwall-layout.zip"
-          test -f "$ZIP"
-
-          mkdir -p "$RUNNER_TEMP/strxwall-package"
-          unzip -q "$ZIP" -d "$RUNNER_TEMP/strxwall-package"
-
-          SRC="$RUNNER_TEMP/strxwall-package/packages/strxwall/luci-app-strxwall"
-          test -f "$SRC/Makefile"
-
-          mkdir -p openwrt/package/strxwall/luci-app-strxwall
-          cp -a "$SRC"/. openwrt/package/strxwall/luci-app-strxwall/
-
       - name: Prepare AW1000 configuration
         env:
           OPENWRT_DIR: ${{ github.workspace }}/openwrt
@@ -341,9 +326,6 @@ jobs:
           echo 'CONFIG_CCACHE=y' >> .config
 
           # HornetWrt packages
-          echo 'CONFIG_PACKAGE_luci-app-strxwall=y' >> .config
-          echo 'CONFIG_PACKAGE_dns2socks=y' >> .config
-          echo 'CONFIG_PACKAGE_conntrack=y' >> .config
           echo 'CONFIG_PACKAGE_luci-theme-footstrap=y' >> .config
           echo 'CONFIG_PACKAGE_luci-app-passwall2=y' >> .config
 
@@ -376,7 +358,7 @@ jobs:
           }
 
           for pkg in \
-            luci-app-strxwall dns2socks conntrack luci-theme-footstrap \
+            luci-theme-footstrap \
             luci-app-passwall2 nlbwmon luci-app-nlbwmon \
             kmod-qmi_wwan_q quectel-cm luci-proto-quectel sms-tool \
             kmod-usb-wdm kmod-usb-net kmod-usb-serial \
@@ -398,20 +380,10 @@ jobs:
           grep -E '^(CONFIG_USE_APK|CONFIG_PACKAGE_MANAGER)' .config || true
           echo "HornetWrt packages verified."
 
-      - name: Verify STRXWALL and modem package payload
+      - name: Verify modem and LuCI package payload
         working-directory: openwrt
         run: |
           set -euo pipefail
-
-          PKG="package/strxwall/luci-app-strxwall"
-          CONFIG="$PKG/files/etc/config/strxwall"
-          INIT="$PKG/files/etc/init.d/strxwall"
-          DNS="$PKG/files/usr/libexec/strxwall-dns"
-
-          test -f "$PKG/Makefile"
-          test -f "$CONFIG"
-          test -f "$INIT"
-          test -f "$DNS"
 
           test -f package/footstrap/luci-theme-footstrap/Makefile
           grep -qx "CONFIG_PACKAGE_luci-theme-footstrap=y" .config
@@ -422,21 +394,9 @@ jobs:
           test -f package/feeds/aw1000/luci-proto-quectel/Makefile
           test -f package/feeds/aw1000/quectel-cm/Makefile
           test -f package/feeds/aw1000/qmi_wwan_q/Makefile
+          test -f package/feeds/luci_smstool/sms-tool/Makefile
 
-          grep -q 'PKG_VERSION:=2.5.53' "$PKG/Makefile"
-
-          grep -Eq "option enabled ['\"]0['\"]" "$CONFIG" || {
-            echo "::error::STRXWALL must be OFF by default"
-            exit 1
-          }
-
-          grep -qx "CONFIG_PACKAGE_luci-app-strxwall=y" .config
-          grep -qx "CONFIG_PACKAGE_dns2socks=y" .config
-          grep -qx "CONFIG_PACKAGE_conntrack=y" .config
-
-          echo "STRXWALL version 2.5.53 verified."
-          echo "STRXWALL default state: OFF."
-          echo "Quectel, Footstrap and PassWall 2 verified."
+          echo "Quectel modem, SMS, Footstrap and PassWall 2 verified."
 
       - name: Restore OpenWrt download and compiler caches
         uses: actions/cache@v4
