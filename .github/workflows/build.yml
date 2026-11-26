@@ -31,7 +31,6 @@ jobs:
         src-git passwall2 https://github.com/Openwrt-Passwall/openwrt-passwall2.git;main
         src-link aw1000 ${{ github.workspace }}/aw1000-feed
         src-git luci_smstool https://github.com/4IceG/luci-app-sms-tool-js.git^0bd41a0b64fa9a41272f391fcd0900fc1115af6e
-        src-git footstrap https://github.com/VizzleTF/luci-theme-footstrap.git^ef68bbbb3a975a5eaa923b37a98e81a4ee005296
 
     steps:
       - name: Checkout RifjerWrt custom files
@@ -196,13 +195,20 @@ jobs:
           echo "PassWall 2 source installed."
 
       - name: Add Footstrap LuCI theme
-        working-directory: openwrt
         run: |
           set -euo pipefail
-          test -f feeds/footstrap/luci-theme-footstrap/Makefile
-          ./scripts/feeds install -p footstrap luci-theme-footstrap
-          test -f package/feeds/footstrap/luci-theme-footstrap/Makefile
-          echo "Footstrap theme source verified."
+
+          git clone https://github.com/VizzleTF/luci-theme-footstrap.git "$RUNNER_TEMP/footstrap-src"
+          git -C "$RUNNER_TEMP/footstrap-src" checkout ef68bbbb3a975a5eaa923b37a98e81a4ee005296
+
+          SRC="$RUNNER_TEMP/footstrap-src/luci-theme-footstrap"
+          test -f "$SRC/Makefile"
+
+          mkdir -p openwrt/package/footstrap
+          cp -a "$SRC" openwrt/package/footstrap/luci-theme-footstrap
+
+          test -f openwrt/package/footstrap/luci-theme-footstrap/Makefile
+          echo "Footstrap package installed."
 
       - name: Add TTL64 rules
         run: |
@@ -407,7 +413,7 @@ jobs:
           test -f "$INIT"
           test -f "$DNS"
 
-          test -f package/feeds/footstrap/luci-theme-footstrap/Makefile
+          test -f package/footstrap/luci-theme-footstrap/Makefile
           grep -qx "CONFIG_PACKAGE_luci-theme-footstrap=y" .config
 
           test -f package/feeds/passwall2/luci-app-passwall2/Makefile
