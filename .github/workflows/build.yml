@@ -274,25 +274,40 @@ jobs:
 
           chmod 0755 "$DIR/99zz-hornetwrt-wireless"
           echo "HornetWrt 2.4 GHz and 5 GHz WiFi defaults prepared."
-
+      
       - name: Enable HornetWrt packages and ccache
         working-directory: openwrt
         run: |
           set -euo pipefail
+
           echo 'CONFIG_CCACHE=y' >> .config
+
+          # HornetWrt packages
           echo 'CONFIG_PACKAGE_luci-app-strxwall=y' >> .config
           echo 'CONFIG_PACKAGE_dns2socks=y' >> .config
           echo 'CONFIG_PACKAGE_conntrack=y' >> .config
           echo 'CONFIG_PACKAGE_luci-theme-footstrap=y' >> .config
           echo 'CONFIG_PACKAGE_luci-app-passwall2=y' >> .config
-          # Quectel RG500Q-EA: QMI primary and MBIM fallback
+
+          # Quectel RG500Q-EA QMI / MBIM
           echo 'CONFIG_PACKAGE_kmod-usb-wdm=y' >> .config
+          echo 'CONFIG_PACKAGE_kmod-usb-net=y' >> .config
           echo 'CONFIG_PACKAGE_kmod-usb-net-qmi-wwan=y' >> .config
+          echo 'CONFIG_PACKAGE_kmod-usb-serial=y' >> .config
+          echo 'CONFIG_PACKAGE_kmod-usb-serial-option=y' >> .config
           echo 'CONFIG_PACKAGE_uqmi=y' >> .config
+          echo 'CONFIG_PACKAGE_wwan=y' >> .config
           echo 'CONFIG_PACKAGE_luci-proto-qmi=y' >> .config
+          echo 'CONFIG_PACKAGE_usbutils=y' >> .config
+
           echo 'CONFIG_PACKAGE_kmod-usb-net-cdc-mbim=y' >> .config
           echo 'CONFIG_PACKAGE_umbim=y' >> .config
           echo 'CONFIG_PACKAGE_luci-proto-mbim=y' >> .config
+
+          # Per-device data usage monitoring
+          echo 'CONFIG_PACKAGE_nlbwmon=y' >> .config
+          echo 'CONFIG_PACKAGE_luci-app-nlbwmon=y' >> .config
+
           make defconfig
 
           grep -qx 'CONFIG_CCACHE=y' .config || {
@@ -300,14 +315,16 @@ jobs:
             exit 1
           }
 
-            if ! grep -qx "CONFIG_PACKAGE_${package}=y" .config; then
-              echo "::error::Required package ${package} was dropped by Kconfig"
+          for pkg in luci-app-strxwall dns2socks conntrack luci-theme-footstrap luci-app-passwall2 nlbwmon luci-app-nlbwmon kmod-usb-wdm kmod-usb-net-qmi-wwan uqmi luci-proto-qmi kmod-usb-net-cdc-mbim umbim luci-proto-mbim; do
+            if ! grep -qx "CONFIG_PACKAGE_${pkg}=y" .config; then
+              echo "::error::Required package ${pkg} was dropped by Kconfig"
               exit 1
             fi
           done
+
           echo "=== Package manager configuration ==="
           grep -E '^(CONFIG_USE_APK|CONFIG_PACKAGE_MANAGER)' .config || true
-          echo "HornetWrt packages and ccache configuration verified."
+          echo "HornetWrt modem and monitoring packages verified."
 
       - name: Verify STRXWALL package payload
         working-directory: openwrt
