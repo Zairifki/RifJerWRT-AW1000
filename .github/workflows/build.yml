@@ -83,6 +83,34 @@ jobs:
           fetch-depth: 1
           path: builder
 
+      - name: Enable AW1000 5G modem packages
+        run: |
+          set -euo pipefail
+
+          CONFIG="builder/devices/common/config"
+          test -f "$CONFIG"
+
+          cat >> "$CONFIG" <<'EOF'
+
+          # HornetWrt AW1000 - Quectel RG500Q-EA QMI support
+          CONFIG_PACKAGE_kmod-usb-wdm=y
+          CONFIG_PACKAGE_kmod-usb-net=y
+          CONFIG_PACKAGE_kmod-usb-net-qmi-wwan=y
+          CONFIG_PACKAGE_kmod-usb-serial=y
+          CONFIG_PACKAGE_kmod-usb-serial-option=y
+          CONFIG_PACKAGE_uqmi=y
+          CONFIG_PACKAGE_wwan=y
+          CONFIG_PACKAGE_luci-proto-qmi=y
+          CONFIG_PACKAGE_usbutils=y
+
+          # Optional MBIM support
+          CONFIG_PACKAGE_kmod-usb-net-cdc-mbim=y
+          CONFIG_PACKAGE_umbim=y
+          CONFIG_PACKAGE_luci-proto-mbim=y
+          EOF
+
+          echo "AW1000 QMI/MBIM modem packages added."
+
       - name: Add local STRXWALL package
         run: |
           set -euo pipefail
