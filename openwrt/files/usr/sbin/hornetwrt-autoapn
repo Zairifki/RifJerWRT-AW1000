@@ -5,6 +5,8 @@ STATUS="/tmp/hornetwrt-autoapn.status"
 LOGTAG="hornetwrt-autoapn"
 CONFIG="/etc/config/hornetwrt-autoapn"
 APN_DB="/etc/hornetwrt/apn-db.csv"
+AT_LOCK="/var/lock/aw1000-modem.lock"
+PORT_HELPER="/usr/sbin/aw1000-modem-ports"
 
 INTERVAL="$(uci -q get hornetwrt-autoapn.main.interval)"
 [ -n "$INTERVAL" ] || INTERVAL=60
@@ -19,9 +21,8 @@ set_status() {
         echo "status=$1"
         echo "message=$2"
         echo "device=${3:-unknown}"
-        echo "imsi=${4:-unknown}"
-        echo "operator=${5:-unknown}"
-        echo "apn=${6:-unknown}"
+        echo "operator=${4:-unknown}"
+        echo "apn=${5:-unknown}"
         echo "auto_apply=disabled"
     } > "$STATUS"
 
@@ -37,35 +38,42 @@ detect_modem() {
     return 1
 }
 
-detect_qmi() {
-    dev="$1"
-    command -v uqmi >/dev/null 2>&1 || return 1
+get_at_port() {
+    [ -x "$PORT_HELPER" ] || return 1
 
-    uqmi -s -d "$dev" -t 5000 --get-serving-system \
-        > /tmp/hornetwrt-serving.json 2>/dev/null || return 1
+    port="$("$PORT_HELPER" port at 2>/dev/null)"
+    [ -c "$port" ] || return 1
 
-    grep -q '"registration"' /tmp/hornetwrt-serving.json
+    echo "$port"
 }
 
-detect_mbim() {
-    dev="$1"
-    command -v umbim >/dev/null 2>&1 || return 1
+at_read() {
+    atdevice="$1"
+    cmd="$2"
 
-    umbim -d "$dev" -n caps \
-        > /tmp/hornetwrt-mbim.json 2>/dev/null
-}
+    [ -c "$atdevice" ] || return 1
+    command -v sms_tool >/dev/null 2>&1 || return 1
+    command -v flock >/dev/null 2>&1 || return 1
 
-get_imsi() {
-    uqmi -s -d "$1" -t 5000 --get-imsi 2>/dev/null |
-        tr -cd '0-9' | head -c 16
+    (
+        waited=0
+
+        while ! flock -n -x 9; do
+            [ "$waited" -ge 20 ] && exit 1
+            sleep 1
+            waited=$((waited + 1))
+        done
+
+        sms_tool -d "$atdevice" at "$cmd" 2>/dev/null
+    ) 9>>"$AT_LOCK"
 }
 
 get_operator() {
-    [ -f /tmp/hornetwrt-serving.json ] || return 1
+    response="$(at_read "$1" 'AT+COPS?')" || return 1
 
-    jsonfilter -i /tmp/hornetwrt-serving.json \
-        -e '@.plmn_description' 2>/dev/null |
-        tr -d '"'
+    printf '%s\n' "$response" |
+        sed -n 's/.*+COPS: [^,]*,[^,]*,"\([^"]*\)".*/\1/p' |
+        head -n 1
 }
 
 lookup_apn() {
@@ -81,12 +89,10 @@ lookup_apn() {
 
         name="$(printf '%s' "$name" | tr '[:upper:]' '[:lower:]')"
 
-        case "$wanted" in
-            *"$name"*)
-                echo "$name|$apn|$match|$state"
-                return 0
-                ;;
-        esac
+        if [ "$wanted" = "$name" ]; then
+            echo "$name|$apn|$match|$state"
+            return 0
+        fi
     done < "$APN_DB"
 
     return 1
@@ -94,51 +100,45 @@ lookup_apn() {
 
 scan_once() {
     dev="$(detect_modem)" || {
-        set_status "NO_MODEM" "Modem QMI/MBIM tidak dikesan."
+        set_status "NO_MODEM" "Modem Quectel tidak dikesan."
         return 1
     }
 
-    if detect_qmi "$dev"; then
-        imsi="$(get_imsi "$dev")"
-        operator="$(get_operator)"
+    atdevice="$(get_at_port)" || {
+        set_status "NO_AT_PORT" "Port AT rasmi AW1000 tidak tersedia." "$dev"
+        return 1
+    }
 
-        if [ -z "$operator" ]; then
-            set_status "OPERATOR_UNKNOWN" \
-                "Modem QMI dikesan tetapi nama operator tidak tersedia." \
-                "$dev" "$imsi"
-            return 0
-        fi
+    operator="$(get_operator "$atdevice")"
 
-        profile="$(lookup_apn "$operator")" || {
-            set_status "PROFILE_NOT_FOUND" \
-                "Operator tidak sepadan dengan database. APN tidak diubah." \
-                "$dev" "$imsi" "$operator"
-            return 0
-        }
+    [ -n "$operator" ] || {
+        set_status "OPERATOR_UNKNOWN" \
+            "Nama operator tidak dapat dibaca melalui AT command." "$atdevice"
+        return 0
+    }
 
-        IFS='|' read -r name apn match state <<EOF
+    profile="$(lookup_apn "$operator")" || {
+        set_status "PROFILE_NOT_FOUND" \
+            "Operator tiada dalam database. APN tidak diubah." \
+            "$atdevice" "$operator"
+        return 0
+    }
+
+    IFS='|' read -r name apn match state <<EOF
 $profile
 EOF
 
+    if [ "$state" = "verified" ] && [ -n "$apn" ]; then
+        set_status "PROFILE_VERIFIED" \
+            "Profil disahkan. Mod pemeriksaan sahaja; APN belum diubah." \
+            "$atdevice" "$name" "$apn"
+    else
         set_status "PROFILE_MANUAL" \
-            "Profil dijumpai. Pengesahan APN diperlukan; tiada perubahan dibuat." \
-            "$dev" "$imsi" "$name" "${apn:-not-set}"
-
-        return 0
+            "Operator dikenal pasti tetapi APN belum disahkan. Tiada perubahan dibuat." \
+            "$atdevice" "$name" "${apn:-not-set}"
     fi
 
-    if detect_mbim "$dev"; then
-        set_status "MBIM_DETECTED" \
-            "Modem MBIM dikesan. Pengenalan operator belum disokong." \
-            "$dev"
-        return 0
-    fi
-
-    set_status "MODEM_UNIDENTIFIED" \
-        "Peranti cdc-wdm ditemui tetapi protokol tidak dikenal pasti." \
-        "$dev"
-
-    return 1
+    return 0
 }
 
 case "$1" in
