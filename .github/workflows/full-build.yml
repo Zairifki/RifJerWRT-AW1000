@@ -1,0 +1,495 @@
+name: RifJerWrt AW1000 - Full Build
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rifjerwrt-aw1000-build
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Full compile and package AW1000 firmware
+    runs-on: ubuntu-26.04
+    timeout-minutes: 360
+
+    env:
+      UPSTREAM_REPO: JuliusBairaktaris/openwrt-ppe-nss
+      UPSTREAM_REF: ppe-nss
+      BUILDER_REPO: JuliusBairaktaris/Qualcommax_NSS_Builder
+      BUILDER_REF: main
+      DEVICE: ipq807x-1g
+      VARIANT: ppe-nss
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      FEEDS: |
+        src-git nss https://github.com/JuliusBairaktaris/nss-packages.git;ppe-nss
+        src-git luci https://github.com/JuliusBairaktaris/luci.git;luci-app-ppe-qos
+        src-git passwall_packages https://github.com/Openwrt-Passwall/openwrt-passwall-packages.git;main
+        src-git passwall2 https://github.com/Openwrt-Passwall/openwrt-passwall2.git;main
+        src-link aw1000 ${{ github.workspace }}/aw1000-feed
+        src-git luci_smstool https://github.com/4IceG/luci-app-sms-tool-js.git^0bd41a0b64fa9a41272f391fcd0900fc1115af6e
+
+    steps:
+      - name: Checkout RifjerWrt custom files
+        uses: actions/checkout@v7
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ github.ref }}
+          path: rifjerwrt
+
+      - name: Install build dependencies
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential bzip2 clang ccache file flex gawk gettext git \
+            libncurses-dev libssl-dev make patch perl python3 rsync \
+            subversion unzip wget which ca-certificates curl zlib1g-dev
+          ccache --version
+          mkdir -p "$CCACHE_DIR"
+          ccache --max-size=5G
+
+      - name: Checkout OpenWrt PPE-NSS source
+        uses: actions/checkout@v7
+        with:
+          repository: ${{ env.UPSTREAM_REPO }}
+          ref: ${{ env.UPSTREAM_REF }}
+          fetch-depth: 0
+          path: openwrt
+
+      - name: Checkout upstream NSS builder
+        uses: actions/checkout@v7
+        with:
+          repository: ${{ env.BUILDER_REPO }}
+          ref: ${{ env.BUILDER_REF }}
+          fetch-depth: 1
+          path: builder
+
+      - name: Checkout AW1000 package feed
+        uses: actions/checkout@v7
+        with:
+          repository: XT-Martinez/aw1000-feed
+          ref: main
+          fetch-depth: 1
+          path: aw1000-feed
+
+      - name: Remove conflicting standard QMI package from AW1000 profile
+        working-directory: openwrt
+        run: |
+          set -euo pipefail
+          FILE="target/linux/qualcommax/image/ipq807x.mk"
+          test -f "$FILE"
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path("target/linux/qualcommax/image/ipq807x.mk")
+          s = p.read_text()
+
+          old = (
+              "\tDEVICE_PACKAGES := ipq-wifi-arcadyan_aw1000 kmod-spi-gpio \\\n"
+              "\t\tkmod-gpio-nxp-74hc164 kmod-usb-serial-option uqmi"
+          )
+          new = (
+              "\tDEVICE_PACKAGES := ipq-wifi-arcadyan_aw1000 kmod-spi-gpio \\\n"
+              "\t\tkmod-gpio-nxp-74hc164 kmod-usb-serial-option"
+          )
+
+          if s.count(old) != 1:
+              raise SystemExit(
+                  "ERROR: AW1000 DEVICE_PACKAGES block did not match exactly once. "
+                  "Stop build rather than applying an uncertain edit."
+              )
+
+          p.write_text(s.replace(old, new, 1))
+          print("Removed uqmi from AW1000 device package list.")
+          PY
+
+          ! grep -A5 -B2 'Device/arcadyan_aw1000' "$FILE" | grep -q 'uqmi'
+
+      # Quectel package selection is performed after feeds are installed,
+      # immediately before the final make defconfig step.
+
+      - name: Prepare AW1000 configuration
+        env:
+          OPENWRT_DIR: ${{ github.workspace }}/openwrt
+          BUILDER_REPO: ${{ github.workspace }}/builder
+        run: |
+          set -euo pipefail
+          bash builder/scripts/prepare-build.sh
+
+      - name: Install HornetWrt Auto APN files
+        run: |
+          set -euo pipefail
+          SRC="rifjerwrt/openwrt/files"
+          DST="openwrt/files"
+
+          test -f "$SRC/usr/sbin/hornetwrt-autoapn"
+          test -f "$SRC/etc/init.d/hornetwrt-autoapn"
+          test -f "$SRC/etc/config/hornetwrt-autoapn"
+          test -f "$SRC/etc/hornetwrt/apn-db.csv"
+
+          mkdir -p "$DST"
+          cp -a "$SRC"/. "$DST"/
+
+          chmod 0755 "$DST/usr/sbin/hornetwrt-autoapn"
+          chmod 0755 "$DST/etc/init.d/hornetwrt-autoapn"
+
+          mkdir -p "$DST/etc/uci-defaults"
+          cat > "$DST/etc/uci-defaults/99-hornetwrt-autoapn" <<'EOF'
+          #!/bin/sh
+          /etc/init.d/hornetwrt-autoapn enable
+          /etc/init.d/hornetwrt-autoapn start
+          exit 0
+          EOF
+
+          chmod 0755 "$DST/etc/uci-defaults/99-hornetwrt-autoapn"
+          test -x "$DST/usr/sbin/hornetwrt-autoapn"
+          test -x "$DST/etc/init.d/hornetwrt-autoapn"
+          test -s "$DST/etc/config/hornetwrt-autoapn"
+
+          echo "HornetWrt Auto APN files installed."
+
+      # PF_RING compatibility patch intentionally omitted until it is tested
+      # against the exact package source and kernel headers.
+
+      - name: Add PassWall 2 package
+        working-directory: openwrt
+        run: |
+          set -euo pipefail
+          test -f feeds/passwall2/luci-app-passwall2/Makefile
+          ./scripts/feeds install -p passwall2 luci-app-passwall2
+          test -f package/feeds/passwall2/luci-app-passwall2/Makefile
+          echo "PassWall 2 source installed."
+
+      - name: Add Footstrap LuCI theme
+        run: |
+          set -euo pipefail
+
+          git clone https://github.com/VizzleTF/luci-theme-footstrap.git "$RUNNER_TEMP/footstrap-src"
+          git -C "$RUNNER_TEMP/footstrap-src" checkout ef68bbbb3a975a5eaa923b37a98e81a4ee005296
+
+          SRC="$RUNNER_TEMP/footstrap-src/luci-theme-footstrap"
+          test -f "$SRC/Makefile"
+
+          mkdir -p openwrt/package/footstrap
+          cp -a "$SRC" openwrt/package/footstrap/luci-theme-footstrap
+
+          test -f openwrt/package/footstrap/luci-theme-footstrap/Makefile
+          echo "Footstrap package installed."
+
+      - name: Add TTL64 rules
+        run: |
+          set -euo pipefail
+          DIR="openwrt/files/usr/share/nftables.d/chain-post/mangle_postrouting"
+          mkdir -p "$DIR"
+
+          cat > "$DIR/99-ttl64.nft" <<'EOF'
+          oifname $wan_devices counter ip ttl set 64
+          oifname $wan_devices counter ip6 hoplimit set 64
+          EOF
+
+          test -s "$DIR/99-ttl64.nft"
+          echo "TTL64 IPv4 and IPv6 rules added."
+
+      - name: Set Footstrap as default LuCI theme
+        run: |
+          set -euo pipefail
+          DIR="openwrt/files/etc/uci-defaults"
+          mkdir -p "$DIR"
+
+          cat > "$DIR/99-rifjerwrt-default-theme" <<'EOF'
+          #!/bin/sh
+          uci -q set luci.main.mediaurlbase='/luci-static/footstrap'
+          uci -q commit luci
+          exit 0
+          EOF
+
+          chmod 0755 "$DIR/99-rifjerwrt-default-theme"
+          test -s "$DIR/99-rifjerwrt-default-theme"
+
+      - name: Configure HornetWrt WiFi defaults
+        run: |
+          set -euo pipefail
+          DIR="openwrt/files/etc/uci-defaults"
+          mkdir -p "$DIR"
+
+          cat > "$DIR/99zz-hornetwrt-wireless" <<'EOF'
+          #!/bin/sh
+          set -u
+
+          found_2g=0
+          found_5g=0
+
+          for dev in $(uci -q show wireless | sed -n 's/^wireless\.\([^.=]*\)=wifi-device$/\1/p'); do
+              band="$(uci -q get "wireless.$dev.band" 2>/dev/null || true)"
+              hwmode="$(uci -q get "wireless.$dev.hwmode" 2>/dev/null || true)"
+              channel="$(uci -q get "wireless.$dev.channel" 2>/dev/null || true)"
+
+              case "$band:$hwmode:$channel" in
+                  2g:*:*|*:11b:*|*:11g:*|*:11ng:*)
+                      ssid="HornetWrt_2G"
+                      found_2g=1
+                      ;;
+                  5g:*:*|*:11a:*|*:11ac:*|*:11axa:*|*:11ax:*)
+                      ssid="HornetWrt_5G"
+                      found_5g=1
+                      ;;
+                  *:*:1|*:*:2|*:*:3|*:*:4|*:*:5|*:*:6|*:*:7|*:*:8|*:*:9|*:*:10|*:*:11|*:*:12|*:*:13|*:*:14)
+                      ssid="HornetWrt_2G"
+                      found_2g=1
+                      ;;
+                  *)
+                      continue
+                      ;;
+              esac
+
+              iface=""
+              for section in $(uci -q show wireless | sed -n 's/^wireless\.\([^=]*\)=wifi-iface$/\1/p'); do
+                  section_dev="$(uci -q get "wireless.$section.device" 2>/dev/null || true)"
+                  section_mode="$(uci -q get "wireless.$section.mode" 2>/dev/null || true)"
+                  [ "$section_dev" = "$dev" ] || continue
+                  [ "$section_mode" = "ap" ] || continue
+                  iface="$section"
+                  break
+              done
+
+              if [ -z "$iface" ]; then
+                  iface="hornet_$dev"
+                  uci set "wireless.$iface=wifi-iface"
+                  uci set "wireless.$iface.device=$dev"
+                  uci set "wireless.$iface.network=lan"
+                  uci set "wireless.$iface.mode=ap"
+              fi
+
+              uci set "wireless.$iface.ssid=$ssid"
+              uci set "wireless.$iface.encryption=psk2"
+              uci set "wireless.$iface.key=password"
+              uci set "wireless.$iface.disabled=0"
+          done
+
+          [ "$found_2g" = "1" ] || {
+              echo "ERROR: 2.4GHz radio not detected"
+              exit 1
+          }
+
+          [ "$found_5g" = "1" ] || {
+              echo "ERROR: 5GHz radio not detected"
+              exit 1
+          }
+
+          uci commit wireless
+          logger -t hornetwrt "WiFi defaults applied"
+          exit 0
+          EOF
+
+          chmod 0755 "$DIR/99zz-hornetwrt-wireless"
+          echo "HornetWrt WiFi defaults prepared."
+
+      - name: Install AW1000 Quectel and SMS feed packages
+        working-directory: openwrt
+        run: |
+          set -euo pipefail
+
+          ./scripts/feeds install -p aw1000 qmi_wwan_q quectel-cm luci-proto-quectel
+          ./scripts/feeds install -p luci_smstool sms-tool
+
+          test -f package/feeds/aw1000/qmi_wwan_q/Makefile
+          test -f package/feeds/aw1000/quectel-cm/Makefile
+          test -f package/feeds/aw1000/luci-proto-quectel/Makefile
+          test -f package/feeds/luci_smstool/sms-tool/Makefile
+
+          echo "Quectel and SMS feed packages installed and verified."
+
+      - name: Enable HornetWrt packages and ccache
+        working-directory: openwrt
+        run: |
+          set -euo pipefail
+
+          echo 'CONFIG_CCACHE=y' >> .config
+
+          # HornetWrt packages
+          echo 'CONFIG_PACKAGE_luci-theme-footstrap=y' >> .config
+          echo 'CONFIG_PACKAGE_luci-app-passwall2=y' >> .config
+
+          # Quectel RG500Q-EA
+          echo 'CONFIG_PACKAGE_kmod-qmi_wwan_q=y' >> .config
+          echo 'CONFIG_QMI_WWAN_Q_QMAP_MODE=2' >> .config
+          echo 'CONFIG_PACKAGE_quectel-cm=y' >> .config
+          echo 'CONFIG_PACKAGE_luci-proto-quectel=y' >> .config
+          echo 'CONFIG_PACKAGE_sms-tool=y' >> .config
+          echo 'CONFIG_PACKAGE_kmod-usb-wdm=y' >> .config
+          echo 'CONFIG_PACKAGE_kmod-usb-net=y' >> .config
+          echo 'CONFIG_PACKAGE_kmod-usb-serial=y' >> .config
+          echo 'CONFIG_PACKAGE_kmod-usb-serial-option=y' >> .config
+          echo 'CONFIG_PACKAGE_usbutils=y' >> .config
+
+          # Disable standard QMI packages
+          echo '# CONFIG_PACKAGE_uqmi is not set' >> .config
+          echo '# CONFIG_PACKAGE_kmod-usb-net-qmi-wwan is not set' >> .config
+          echo '# CONFIG_PACKAGE_luci-proto-qmi is not set' >> .config
+
+          # Data usage monitoring
+          echo 'CONFIG_PACKAGE_nlbwmon=y' >> .config
+          echo 'CONFIG_PACKAGE_luci-app-nlbwmon=y' >> .config
+
+          make defconfig
+
+          grep -qx 'CONFIG_CCACHE=y' .config || {
+            echo "::error::ccache was dropped by Kconfig"
+            exit 1
+          }
+
+          for pkg in \
+            luci-theme-footstrap \
+            luci-app-passwall2 nlbwmon luci-app-nlbwmon \
+            kmod-qmi_wwan_q quectel-cm luci-proto-quectel sms-tool \
+            kmod-usb-wdm kmod-usb-net kmod-usb-serial \
+            kmod-usb-serial-option usbutils; do
+            grep -qx "CONFIG_PACKAGE_${pkg}=y" .config || {
+              echo "::error::Required package ${pkg} was dropped by Kconfig"
+              exit 1
+            }
+          done
+
+          for pkg in uqmi kmod-usb-net-qmi-wwan luci-proto-qmi; do
+            if grep -q "^CONFIG_PACKAGE_${pkg}=y" .config; then
+              echo "::error::Conflicting standard QMI package enabled: ${pkg}"
+              exit 1
+            fi
+          done
+
+          echo "=== Package manager configuration ==="
+          grep -E '^(CONFIG_USE_APK|CONFIG_PACKAGE_MANAGER)' .config || true
+          echo "HornetWrt packages verified."
+
+      - name: Verify modem and LuCI package payload
+        working-directory: openwrt
+        run: |
+          set -euo pipefail
+
+          test -f package/footstrap/luci-theme-footstrap/Makefile
+          grep -qx "CONFIG_PACKAGE_luci-theme-footstrap=y" .config
+
+          test -f package/feeds/passwall2/luci-app-passwall2/Makefile
+          grep -qx "CONFIG_PACKAGE_luci-app-passwall2=y" .config
+
+          test -f package/feeds/aw1000/luci-proto-quectel/Makefile
+          test -f package/feeds/aw1000/quectel-cm/Makefile
+          test -f package/feeds/aw1000/qmi_wwan_q/Makefile
+          test -f package/feeds/luci_smstool/sms-tool/Makefile
+
+          echo "Quectel modem, SMS, Footstrap and PassWall 2 verified."
+
+      - name: Record exact OpenWrt source revision
+        id: source-version
+        run: |
+          set -euo pipefail
+          echo "sha=$(git -C openwrt rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore Precompile toolchain cache
+        id: build-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            openwrt/dl
+            openwrt/build_dir/host
+            openwrt/build_dir/hostpkg
+            openwrt/build_dir/toolchain-*
+            openwrt/staging_dir/host
+            openwrt/staging_dir/hostpkg
+            openwrt/staging_dir/toolchain-*
+            .ccache
+          key: rifjerwrt-aw1000-toolchain-v3-${{ runner.os }}-${{ steps.source-version.outputs.sha }}-${{ hashFiles('openwrt/.config') }}
+      - name: Show cache status
+        run: |
+          set -euo pipefail
+          ccache --show-stats || true
+          du -sh openwrt/dl .ccache 2>/dev/null || true
+
+      - name: Download source packages
+        working-directory: openwrt
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            if make download -j"$(nproc)"; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              echo "::error::Source download failed after 3 attempts"
+              exit 1
+            fi
+            sleep 5
+          done
+
+      - name: Compile firmware
+        working-directory: openwrt
+        run: |
+          set -euo pipefail
+          echo "===== BUILD START ====="
+          date -u
+          make -j"$(nproc)" V=s 2>&1 | tee ../build.log
+          echo "===== BUILD FINISHED ====="
+          date -u
+
+      - name: Upload Build Log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: HornetWrt-Build-Log-${{ github.run_number }}
+          path: build.log
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Show compiler cache statistics
+        if: always()
+        run: |
+          ccache --show-stats || true
+
+      - name: Collect HornetWrt AW1000 firmware
+        id: image
+        run: |
+          set -euo pipefail
+          mkdir -p release
+
+          mapfile -t images < <(
+            find openwrt/bin/targets -type f \
+              -name '*arcadyan_aw1000*squashfs-sysupgrade.bin'
+          )
+
+          if [ "${#images[@]}" -ne 1 ]; then
+            echo "::error::Expected exactly one AW1000 image"
+            exit 1
+          fi
+
+          cp "${images[0]}" release/HornetWrt-AW1000-sysupgrade.bin
+
+          cp "$(dirname "${images[0]}")/config.buildinfo" \
+            release/ 2>/dev/null || true
+
+          (cd release && sha256sum *.bin > SHA256SUMS)
+          echo "image=HornetWrt-AW1000-sysupgrade.bin" >> "$GITHUB_OUTPUT"
+
+      - name: Upload firmware artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: HornetWrt-AW1000-${{ github.run_number }}
+          path: release/*
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Build summary
+        run: |
+          {
+            echo "## RifJerWrt AW1000 Full Build"
+            echo "- Device: Arcadyan AW1000 Hardware V1"
+            echo "- Target: qualcommax/ipq807x"
+            echo "- Source: $UPSTREAM_REPO@$UPSTREAM_REF"
+            echo "- Builder: $BUILDER_REPO@$BUILDER_REF"
+            echo "- Firmware: ${{ steps.image.outputs.image }}"
+            echo
+            echo "Sysupgrade image only. Do not flash directly over stock vendor firmware."
+          } >> "$GITHUB_STEP_SUMMARY"
